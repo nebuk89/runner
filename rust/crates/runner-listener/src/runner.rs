@@ -28,6 +28,29 @@ use crate::self_updater_v2::{RunnerRefreshMessage, SelfUpdaterV2};
 /// Delay between message poll iterations on empty response.
 const MESSAGE_POLL_DELAY: Duration = Duration::from_secs(1);
 
+/// Reference to a job from the V2 broker (minimal body in RunnerJobRequest).
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RunnerJobRequestRef {
+    runner_request_id: String,
+    #[serde(default)]
+    run_service_url: Option<String>,
+    #[serde(default)]
+    billing_owner_id: Option<String>,
+    #[serde(default)]
+    should_acknowledge: bool,
+}
+
+/// Payload for POST /acquirejob on the run service.
+#[derive(Debug, serde::Serialize)]
+struct AcquireJobRequest {
+    #[serde(rename = "jobMessageId")]
+    job_message_id: String,
+    #[serde(rename = "runnerOS")]
+    runner_os: String,
+    #[serde(rename = "billingOwnerId")]
+    billing_owner_id: String,
+}
+
 /// Grace period before force shutdown.
 #[allow(dead_code)]
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(30);
@@ -384,6 +407,53 @@ impl Runner {
                             let _ = listener.delete_message_async(&message).await;
                         }
 
+                        MessageType::RunnerJobRequest => {
+                            self.trace.info("Received RunnerJobRequest (V2 broker flow)");
+                            match serde_json::from_str::<RunnerJobRequestRef>(&message.body) {
+                                Ok(msg_ref) => {
+                                    // 1. Acknowledge (best-effort)
+                                    if msg_ref.should_acknowledge {
+                                        if let Err(e) = listener.acknowledge_message_async(&msg_ref.runner_request_id).await {
+                                            self.trace.warning(&format!(
+                                                "Best-effort acknowledge failed: {}", e
+                                            ));
+                                        }
+                                    }
+
+                                    // 2. Acquire the full job from the run service
+                                    let run_url = msg_ref.run_service_url.as_deref()
+                                        .unwrap_or(&runner_settings.server_url);
+                                    let billing_id = msg_ref.billing_owner_id.as_deref()
+                                        .unwrap_or("");
+
+                                    match self.acquire_job(
+                                        &listener,
+                                        run_url,
+                                        &msg_ref.runner_request_id,
+                                        billing_id,
+                                    ).await {
+                                        Ok(job_request) => {
+                                            if let Err(e) = job_dispatcher.run(&job_request).await {
+                                                self.trace.error(&format!(
+                                                    "Failed to dispatch V2 job: {:?}", e
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.trace.warning(&format!(
+                                                "Failed to acquire job: {}", e
+                                            ));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    self.trace.error(&format!(
+                                        "Failed to deserialize RunnerJobRequestRef: {}", e
+                                    ));
+                                }
+                            }
+                        }
+
                         MessageType::JobCancel => {
                             self.trace.info("Received job cancel (V1)");
                             match serde_json::from_str::<JobCancelMessage>(&message.body) {
@@ -438,7 +508,7 @@ impl Runner {
                             let _ = listener.delete_message_async(&message).await;
                         }
 
-                        MessageType::JobMetadata | MessageType::Unknown => {
+                        MessageType::JobMetadata | MessageType::BrokerMigration | MessageType::Unknown => {
                             self.trace.verbose(&format!(
                                 "Ignoring message type: {}",
                                 message.message_type
@@ -690,6 +760,69 @@ impl Runner {
 
         let _ = listener.delete_session_async().await;
         Ok(constants::return_code::SUCCESS)
+    }
+
+    // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // Broker job acquisition
+    // -----------------------------------------------------------------------
+
+    /// Acquire the full job message from the run service (V2 broker flow).
+    async fn acquire_job(
+        &self,
+        listener: &MessageListener,
+        run_service_url: &str,
+        runner_request_id: &str,
+        billing_owner_id: &str,
+    ) -> Result<AgentJobRequestMessage> {
+        let access_token = listener.get_access_token()
+            .ok_or_else(|| anyhow::anyhow!("No access token for acquire job"))?;
+
+        let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
+
+        let base = run_service_url.trim_end_matches('/');
+        let url = format!("{}/acquirejob", base);
+
+        let payload = AcquireJobRequest {
+            job_message_id: runner_request_id.to_string(),
+            runner_os: constants::CURRENT_PLATFORM.label_name().to_string(),
+            billing_owner_id: billing_owner_id.to_string(),
+        };
+
+        self.trace.info(&format!("Acquiring job from: {}", url));
+
+        let response = client
+            .post(&url)
+            .bearer_auth(&access_token)
+            .header("Accept", "application/json;api-version=6.0-preview")
+            .json(&payload)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .context("Failed to send acquire job request")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Acquire job failed with HTTP {}: {}",
+                status.as_u16(),
+                body
+            ));
+        }
+
+        let body_text = response.text().await
+            .context("Failed to read acquire job response")?;
+
+        self.trace.info(&format!(
+            "Acquired job response (first 500 chars): {}",
+            &body_text[..body_text.len().min(500)]
+        ));
+
+        let job_message: AgentJobRequestMessage = serde_json::from_str(&body_text)
+            .context("Failed to deserialize acquired job message")?;
+
+        Ok(job_message)
     }
 
     // -----------------------------------------------------------------------

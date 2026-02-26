@@ -67,6 +67,19 @@ impl fmt::Display for OsPlatform {
     }
 }
 
+impl OsPlatform {
+    /// Label name for runner registration, matching C# VarUtil.OS.
+    /// Note: Display returns "OSX" (internal platform name), but the runner
+    /// label must be "macOS" to match GitHub's `runs-on` expectations.
+    pub fn label_name(&self) -> &'static str {
+        match self {
+            OsPlatform::Linux => "Linux",
+            OsPlatform::MacOS => "macOS",
+            OsPlatform::Windows => "Windows",
+        }
+    }
+}
+
 /// CPU architecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Architecture {
@@ -83,6 +96,18 @@ impl fmt::Display for Architecture {
             Architecture::X64 => write!(f, "X64"),
             Architecture::Arm => write!(f, "ARM"),
             Architecture::Arm64 => write!(f, "ARM64"),
+        }
+    }
+}
+
+impl Architecture {
+    /// Label name for runner registration, matching C# VarUtil.OSArchitecture.
+    pub fn label_name(&self) -> &'static str {
+        match self {
+            Architecture::X86 => "X86",
+            Architecture::X64 => "X64",
+            Architecture::Arm => "ARM",
+            Architecture::Arm64 => "ARM64",
         }
     }
 }

@@ -52,7 +52,7 @@ pub struct JobCancelMessage {
     #[serde(rename = "jobId")]
     pub job_id: Uuid,
     #[serde(default)]
-    pub timeout: Option<u64>,
+    pub timeout: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,6 @@ struct WorkerDispatchInfo {
     request_id: u64,
     cancel_token: CancellationToken,
     worker_handle: Option<JoinHandle<Result<i32>>>,
-    channel: ProcessChannel,
 }
 
 // ---------------------------------------------------------------------------
@@ -142,10 +141,11 @@ impl JobDispatcher {
 
         // Create IPC channel
         let mut channel = ProcessChannel::new();
-        let temp_dir = self.context.get_directory(WellKnownDirectory::Temp);
-        std::fs::create_dir_all(&temp_dir)?;
+        // Use /tmp for socket path to avoid exceeding macOS SUN_LEN limit (104 chars)
+        // on Unix domain socket paths. The _work/_temp directory is often too deep.
+        let socket_dir = std::path::PathBuf::from("/tmp");
         let socket_path = channel
-            .start_server(&temp_dir)
+            .start_server(&socket_dir)
             .context("Failed to create IPC channel for worker")?;
 
         self.trace.info(&format!(
@@ -178,6 +178,7 @@ impl JobDispatcher {
                 worker_binary_clone,
                 socket_path_clone,
                 job_body,
+                channel,
                 cancel_for_task,
             )
             .await;
@@ -225,7 +226,6 @@ impl JobDispatcher {
                     request_id: job_request.request_id,
                     cancel_token,
                     worker_handle: Some(handle),
-                    channel,
                 },
             );
         }
@@ -239,7 +239,8 @@ impl JobDispatcher {
         trace: Tracing,
         worker_binary: PathBuf,
         socket_path: String,
-        _job_body: String,
+        job_body: String,
+        mut channel: ProcessChannel,
         cancel: CancellationToken,
     ) -> Result<i32> {
         trace.info(&format!(
@@ -263,10 +264,21 @@ impl JobDispatcher {
             child.id().unwrap_or(0)
         ));
 
-        // Wait for the worker to connect, then send the job message
-        // In a real implementation, we'd wait for the channel accept,
-        // but for now we use a brief delay and then try to send.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Wait for the worker to connect to the IPC socket
+        trace.info("Waiting for worker to connect to IPC socket...");
+        channel.accept().await.context("Failed to accept worker IPC connection")?;
+        trace.info("Worker connected to IPC socket");
+
+        // Send the job request to the worker
+        trace.info("Sending job request to worker via IPC...");
+        channel
+            .send_async(
+                runner_common::process_channel::MessageType::NewJobRequest,
+                &job_body,
+            )
+            .await
+            .context("Failed to send job request to worker via IPC")?;
+        trace.info("Job request sent to worker");
 
         // Wait for the worker to finish or for cancellation
         let exit_code = tokio::select! {

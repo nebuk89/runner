@@ -93,13 +93,8 @@ impl ProcessChannel {
     pub fn start_server(&mut self, socket_dir: &std::path::Path) -> Result<String> {
         let socket_path = socket_dir.join(format!("runner_ipc_{}", uuid::Uuid::new_v4()));
 
-        let listener = {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
-                UnixListener::bind(&socket_path)
-                    .with_context(|| format!("Failed to bind Unix socket at {:?}", socket_path))
-            })?
-        };
+        let listener = UnixListener::bind(&socket_path)
+            .with_context(|| format!("Failed to bind Unix socket at {:?}", socket_path))?;
 
         let path_str = socket_path
             .to_str()

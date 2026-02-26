@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use runner_common::config_store::{ConfigurationStore, RunnerSettings};
+use runner_common::constants;
 use runner_common::credential_data::CredentialData;
 use runner_common::host_context::HostContext;
 use runner_sdk::TraceWriter;
@@ -52,7 +53,7 @@ pub struct SessionEncryptionKey {
 /// A message received from the server via long-poll.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskAgentMessage {
-    #[serde(rename = "messageId")]
+    #[serde(default, rename = "messageId")]
     pub message_id: u64,
     #[serde(rename = "messageType")]
     pub message_type: String,
@@ -65,8 +66,10 @@ impl TaskAgentMessage {
     pub fn type_kind(&self) -> MessageType {
         match self.message_type.as_str() {
             "PipelineAgentJobRequest" | "AgentJobRequest" => MessageType::JobRequest,
-            "JobCancelMessage" => MessageType::JobCancel,
+            "RunnerJobRequest" => MessageType::RunnerJobRequest,
+            "JobCancelMessage" | "JobCancellation" => MessageType::JobCancel,
             "AgentRefreshMessage" => MessageType::AgentRefresh,
+            "BrokerMigration" => MessageType::BrokerMigration,
             "RunnerRefreshMessage" => MessageType::RunnerRefresh,
             "JobMetadataMessage" => MessageType::JobMetadata,
             _ => MessageType::Unknown,
@@ -78,11 +81,20 @@ impl TaskAgentMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     JobRequest,
+    RunnerJobRequest,
     JobCancel,
     AgentRefresh,
     RunnerRefresh,
     JobMetadata,
+    BrokerMigration,
     Unknown,
+}
+
+/// Broker migration message body.
+#[derive(Debug, Clone, Deserialize)]
+struct BrokerMigrationBody {
+    #[serde(rename = "brokerBaseUrl")]
+    broker_base_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +132,11 @@ impl MessageListener {
             access_token: None,
             clock_skew: Duration::ZERO,
         }
+    }
+
+    /// Get the current access token (for use by external callers like Runner).
+    pub fn get_access_token(&self) -> Option<String> {
+        self.access_token.clone()
     }
 
     /// Create a session on the Actions service.
@@ -220,9 +237,10 @@ impl MessageListener {
 
         let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
 
+        let base = settings.server_url.trim_end_matches('/');
         let url = format!(
             "{}/_apis/distributedtask/pools/{}/sessions",
-            settings.server_url, settings.pool_id
+            base, settings.pool_id
         );
 
         let session_request = serde_json::json!({
@@ -236,6 +254,7 @@ impl MessageListener {
         let response = client
             .post(&url)
             .bearer_auth(&token)
+            .header("Accept", "application/json;api-version=6.0-preview")
             .json(&session_request)
             .send()
             .await
@@ -301,9 +320,18 @@ impl MessageListener {
 
         let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
 
+        let base = settings.server_url.trim_end_matches('/');
         let url = format!(
-            "{}/_apis/distributedtask/pools/{}/sessions/{}/messages?lastMessageId={}",
-            settings.server_url, settings.pool_id, session.session_id, self.last_message_id
+            "{}/_apis/distributedtask/pools/{}/messages?sessionId={}&lastMessageId={}&status={}&runnerVersion={}&os={}&architecture={}&disableUpdate={}",
+            base,
+            settings.pool_id,
+            session.session_id,
+            self.last_message_id,
+            "Online",
+            runner_sdk::build_constants::RunnerPackage::VERSION,
+            constants::CURRENT_PLATFORM.label_name(),
+            constants::CURRENT_ARCHITECTURE.label_name(),
+            settings.disable_update,
         );
 
         let response = tokio::select! {
@@ -311,10 +339,23 @@ impl MessageListener {
                 client
                     .get(&url)
                     .bearer_auth(token)
+                    .header("Accept", "application/json;api-version=6.0-preview")
                     .timeout(GET_MESSAGE_TIMEOUT)
                     .send()
                     .await
-            } => result.context("Failed to poll for messages")?,
+            } => {
+                match result {
+                    Ok(resp) => resp,
+                    Err(e) if e.is_timeout() => {
+                        // Long-poll timeout is normal — no message available
+                        self.trace.verbose("Long-poll timed out — no message available");
+                        return Ok(None);
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Failed to poll for messages: {}", e));
+                    }
+                }
+            },
             _ = cancel.cancelled() => {
                 return Ok(None);
             }
@@ -353,12 +394,40 @@ impl MessageListener {
             ));
         }
 
-        let message: TaskAgentMessage = response
-            .json()
+        let body_text = response
+            .text()
             .await
+            .context("Failed to read message response body")?;
+
+        self.trace.info(&format!("Raw message response: {}", &body_text[..body_text.len().min(500)]));
+
+        let mut message: TaskAgentMessage = serde_json::from_str(&body_text)
             .context("Failed to deserialize message response")?;
 
-        self.last_message_id = message.message_id;
+        // Handle BrokerMigration: the V1 endpoint tells us to get the real
+        // message from the V2 broker instead.
+        if message.type_kind() == MessageType::BrokerMigration {
+            self.trace.info("Received BrokerMigration — following up with broker");
+            let migration: BrokerMigrationBody = serde_json::from_str(&message.body)
+                .context("Failed to parse BrokerMigration body")?;
+
+            match self.get_message_from_broker(&migration.broker_base_url, session, settings, token, cancel.clone()).await {
+                Ok(Some(broker_msg)) => {
+                    message = broker_msg;
+                }
+                Ok(None) => {
+                    return Ok(None);
+                }
+                Err(e) => {
+                    self.trace.warning(&format!("Broker message request failed: {}", e));
+                    return Ok(None);
+                }
+            }
+        }
+
+        if message.message_id > 0 {
+            self.last_message_id = message.message_id;
+        }
 
         self.trace.info(&format!(
             "Received message #{}: type={}",
@@ -366,6 +435,121 @@ impl MessageListener {
         ));
 
         Ok(Some(message))
+    }
+
+    /// Follow up a BrokerMigration by getting the real message from the V2 broker.
+    async fn get_message_from_broker(
+        &self,
+        broker_base_url: &str,
+        session: &TaskAgentSession,
+        settings: &RunnerSettings,
+        token: &str,
+        cancel: CancellationToken,
+    ) -> Result<Option<TaskAgentMessage>> {
+        let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
+
+        let base = broker_base_url.trim_end_matches('/');
+        let url = format!(
+            "{}/message?sessionId={}&status={}&runnerVersion={}&os={}&architecture={}&disableUpdate={}",
+            base,
+            session.session_id,
+            "Online",
+            runner_sdk::build_constants::RunnerPackage::VERSION,
+            constants::CURRENT_PLATFORM.label_name(),
+            constants::CURRENT_ARCHITECTURE.label_name(),
+            settings.disable_update,
+        );
+
+        self.trace.info(&format!("Requesting message from broker: {}", url));
+
+        let response = tokio::select! {
+            result = async {
+                client
+                    .get(&url)
+                    .bearer_auth(token)
+                    .header("Accept", "application/json;api-version=6.0-preview")
+                    .timeout(GET_MESSAGE_TIMEOUT)
+                    .send()
+                    .await
+            } => {
+                match result {
+                    Ok(resp) => resp,
+                    Err(e) if e.is_timeout() => {
+                        self.trace.verbose("Broker long-poll timed out — no message available");
+                        return Ok(None);
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Failed to poll broker: {}", e));
+                    }
+                }
+            },
+            _ = cancel.cancelled() => {
+                return Ok(None);
+            }
+        };
+
+        let status = response.status();
+
+        self.trace.info(&format!("Broker response status: {}", status.as_u16()));
+
+        if status == reqwest::StatusCode::ACCEPTED || status == reqwest::StatusCode::NO_CONTENT {
+            self.trace.info("Broker returned 202/204 — no messages available");
+            return Ok(None);
+        }
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Broker message request failed with HTTP {}: {}",
+                status.as_u16(),
+                body
+            ));
+        }
+
+        let body_text = response
+            .text()
+            .await
+            .context("Failed to read broker response body")?;
+
+        self.trace.info(&format!("Broker response: {}", &body_text[..body_text.len().min(500)]));
+
+        let message: TaskAgentMessage = serde_json::from_str(&body_text)
+            .context("Failed to deserialize broker message")?;
+
+        Ok(Some(message))
+    }
+
+    /// Acknowledge a runner request to the broker (best-effort, short timeout).
+    pub async fn acknowledge_message_async(&self, runner_request_id: &str) -> Result<()> {
+        let session = self.session.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active session"))?;
+        let token = self.access_token.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No access token"))?;
+
+        let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
+
+        let url = format!(
+            "https://broker.actions.githubusercontent.com/acknowledge?sessionId={}&status=Online&runnerVersion={}&os={}&architecture={}",
+            session.session_id,
+            runner_sdk::build_constants::RunnerPackage::VERSION,
+            constants::CURRENT_PLATFORM.label_name(),
+            constants::CURRENT_ARCHITECTURE.label_name(),
+        );
+
+        let body = serde_json::json!({"runnerRequestId": runner_request_id});
+
+        self.trace.info(&format!("Acknowledging runner request '{}'", runner_request_id));
+
+        let _ = client
+            .post(&url)
+            .bearer_auth(token)
+            .header("Accept", "application/json;api-version=6.0-preview")
+            .json(&body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?;
+
+        Ok(())
     }
 
     /// Delete a message that has been processed.
@@ -387,14 +571,16 @@ impl MessageListener {
 
         let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
 
+        let base = settings.server_url.trim_end_matches('/');
         let url = format!(
-            "{}/_apis/distributedtask/pools/{}/sessions/{}/messages/{}",
-            settings.server_url, settings.pool_id, session.session_id, message.message_id
+            "{}/_apis/distributedtask/pools/{}/messages/{}?sessionId={}",
+            base, settings.pool_id, message.message_id, session.session_id
         );
 
         let response = client
             .delete(&url)
             .bearer_auth(token)
+            .header("Accept", "application/json;api-version=6.0-preview")
             .send()
             .await
             .context("Failed to send message delete request")?;
@@ -434,14 +620,16 @@ impl MessageListener {
 
         let client = runner_common::HttpClientFactory::create_client(&self.context.web_proxy)?;
 
+        let base = settings.server_url.trim_end_matches('/');
         let url = format!(
             "{}/_apis/distributedtask/pools/{}/sessions/{}",
-            settings.server_url, settings.pool_id, session.session_id
+            base, settings.pool_id, session.session_id
         );
 
         let _ = client
             .delete(&url)
             .bearer_auth(&token)
+            .header("Accept", "application/json;api-version=6.0-preview")
             .send()
             .await;
 
@@ -473,7 +661,12 @@ impl MessageListener {
         ))
     }
 
-    /// Exchange an OAuth token using client credentials.
+    /// Exchange an OAuth token using client credentials with JWT Bearer assertion.
+    ///
+    /// Matches the C# `VssOAuthJwtBearerClientCredential` + `VssOAuthClientCredentialsGrant` flow:
+    /// - grant_type = client_credentials
+    /// - client_assertion_type = urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+    /// - client_assertion = <signed JWT with iss=clientId, sub=clientId, aud=authUrl, jti=guid>
     async fn exchange_oauth_token(
         &self,
         _client_id: &str,
@@ -488,11 +681,13 @@ impl MessageListener {
             .context("Failed to read RSA key for OAuth token exchange")?;
 
         let now = chrono::Utc::now();
+        let jti = uuid::Uuid::new_v4().to_string();
         let claims = serde_json::json!({
             "sub": _client_id,
             "iss": _client_id,
             "aud": auth_url,
-            "nbf": (now - chrono::Duration::minutes(5)).timestamp(),
+            "jti": jti,
+            "nbf": now.timestamp(),
             "exp": (now + chrono::Duration::minutes(5)).timestamp(),
         });
 
@@ -508,8 +703,9 @@ impl MessageListener {
         let response = client
             .post(auth_url)
             .form(&[
-                ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
-                ("assertion", &jwt),
+                ("grant_type", "client_credentials"),
+                ("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+                ("client_assertion", &jwt),
             ])
             .send()
             .await

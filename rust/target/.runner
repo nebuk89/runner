@@ -1,0 +1,15 @@
+{
+  "AgentId": 11,
+  "AgentName": "rust-runner-6",
+  "SkipSessionRecover": false,
+  "PoolId": 1,
+  "PoolName": "Default",
+  "DisableUpdate": false,
+  "Ephemeral": false,
+  "ServerUrl": "https://pipelinesghubeus12.actions.githubusercontent.com/JaPbvVpV66hOaFvavtEoBZZEgLISNqJoCHVqsytv8vQS2qYOuW/",
+  "GitHubUrl": "https://github.com/nebuk89/test-small-workflows",
+  "WorkFolder": "_work",
+  "UseV2Flow": false,
+  "UseRunnerAdminFlow": false,
+  "IsHostedServer": true
+}
