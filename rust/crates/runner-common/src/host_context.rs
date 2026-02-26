@@ -357,8 +357,8 @@ impl HostContext {
         // PID
         agents.push(format!("Pid/{}", std::process::id()));
 
-        // Creation time
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.7fZ");
+        // Creation time (%.6f = microsecond precision, matching C# "%.7f" intent)
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ");
         agents.push(format!("CreationTime/{}", now));
 
         // Host type
