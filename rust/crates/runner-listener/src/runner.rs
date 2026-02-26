@@ -600,9 +600,10 @@ impl Runner {
                     match message.type_kind() {
                         BrokerMessageType::RunnerJobRequest => {
                             self.trace.info("Received job request (V2)");
+                            let raw_body = message.body.clone();
                             match serde_json::from_str::<AgentJobRequestMessage>(&message.body) {
                                 Ok(job_request) => {
-                                    if let Err(e) = job_dispatcher.run(&job_request).await {
+                                    if let Err(e) = job_dispatcher.run(&job_request, raw_body).await {
                                         self.trace.error(&format!(
                                             "Failed to dispatch V2 job: {:?}",
                                             e
