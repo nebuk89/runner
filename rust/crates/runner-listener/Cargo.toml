@@ -1,0 +1,49 @@
+[package]
+name = "runner-listener"
+description = "GitHub Actions Runner Listener - main entry point and message loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "runner-listener"
+path = "src/main.rs"
+
+[dependencies]
+runner-sdk = { path = "../runner-sdk" }
+runner-common = { path = "../runner-common" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+rsa = { workspace = true }
+jsonwebtoken = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+tempfile = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+clap = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+hostname = "0.4"
+tokio-util = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

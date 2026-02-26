@@ -1,0 +1,26 @@
+[package]
+name = "runner-plugin-host"
+description = "GitHub Actions Runner Plugin Host - out-of-process plugin executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "runner-plugin-host"
+path = "src/main.rs"
+
+[dependencies]
+runner-sdk = { path = "../runner-sdk" }
+runner-plugins = { path = "../runner-plugins" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+async-trait = { workspace = true }
+ctrlc = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
