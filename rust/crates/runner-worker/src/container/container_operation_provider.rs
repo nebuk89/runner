@@ -59,49 +59,22 @@ impl ContainerOperationProvider {
         context.debug(&format!("Network created: {}", network_id));
 
         // Start service containers
-        for (i, svc_def) in message.job_service_containers.iter().enumerate() {
-            let svc_name = format!("svc_{}_{}", job_id, i);
-            context.info(&format!(
-                "Starting service container: {} ({})",
-                svc_name, svc_def.image
-            ));
-
-            match self
-                .start_service_container(context, svc_def, &svc_name, &network_name)
-                .await
-            {
-                Ok(container_info) => {
-                    context.global_mut().service_containers.push(container_info);
-                }
-                Err(e) => {
-                    context.error(&format!(
-                        "Failed to start service container {}: {:#}",
-                        svc_name, e
-                    ));
-                    return Err(e);
-                }
-            }
+        // TODO: Parse service containers from TemplateToken format.
+        // For now, TemplateToken-based containers are not supported.
+        if message.has_service_containers() {
+            context.warning(
+                "Service containers in TemplateToken format are not yet supported \
+                 in the Rust runner. Skipping service container startup.",
+            );
         }
 
         // Start the job container if defined
-        if let Some(ref job_container_def) = message.job_container {
-            context.info(&format!(
-                "Starting job container: {}",
-                job_container_def.image
-            ));
-
-            match self
-                .start_job_container(context, job_container_def, job_id, &network_name)
-                .await
-            {
-                Ok(container_info) => {
-                    context.global_mut().container_info = Some(container_info);
-                }
-                Err(e) => {
-                    context.error(&format!("Failed to start job container: {:#}", e));
-                    return Err(e);
-                }
-            }
+        // TODO: Parse job container from TemplateToken format.
+        if message.has_job_container() {
+            context.warning(
+                "Job container in TemplateToken format is not yet supported \
+                 in the Rust runner. Skipping job container startup.",
+            );
         }
 
         Ok(())

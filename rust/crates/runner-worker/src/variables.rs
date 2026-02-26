@@ -355,9 +355,9 @@ mod tests {
             job_id: String::new(),
             job_display_name: String::new(),
             request_id: 0,
-            plan_id: String::new(),
-            timeline_id: String::new(),
-            environment_variables: HashMap::new(),
+            plan: None,
+            timeline: None,
+            environment_variables: Vec::new(),
             variables: HashMap::new(),
             steps: Vec::new(),
             resources: Default::default(),
@@ -365,9 +365,10 @@ mod tests {
             file_table: Vec::new(),
             context_data: HashMap::new(),
             job_container: None,
-            job_service_containers: Vec::new(),
+            job_service_containers: None,
             actor: String::new(),
             message_type: String::new(),
+            extra: HashMap::new(),
         };
 
         message.variables.insert(

@@ -15,7 +15,7 @@ use crate::github_context::GitHubContext;
 use crate::runner_context::RunnerContext;
 use crate::steps_context::StepsContext;
 use crate::variables::Variables;
-use crate::worker::{FileTableEntry, ServiceEndpoint};
+use crate::worker::ServiceEndpoint;
 
 // ---------------------------------------------------------------------------
 // IStep trait
@@ -66,7 +66,7 @@ pub struct Global {
     pub endpoints: Vec<ServiceEndpoint>,
 
     /// File table for file commands.
-    pub file_table: Vec<FileTableEntry>,
+    pub file_table: Vec<String>,
 
     /// Job-level environment variables.
     pub environment_variables: HashMap<String, String>,

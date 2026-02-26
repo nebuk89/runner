@@ -116,7 +116,11 @@ impl JobDispatcher {
     }
 
     /// Dispatch a job request to a new worker process.
-    pub async fn run(&self, job_request: &AgentJobRequestMessage) -> Result<()> {
+    /// Dispatch a job request to a new worker process.
+    ///
+    /// `raw_body` is the raw JSON body from the server (passed through to the
+    /// worker IPC without re-serialization so no fields are lost).
+    pub async fn run(&self, job_request: &AgentJobRequestMessage, raw_body: String) -> Result<()> {
         let job_id = job_request.job_id;
 
         self.trace.info(&format!(
@@ -156,9 +160,9 @@ impl JobDispatcher {
         // Locate the worker binary
         let worker_binary = self.find_worker_binary()?;
 
-        // Serialize the job request to send to the worker
-        let job_body = serde_json::to_string(job_request)
-            .context("Failed to serialize job request for worker")?;
+        // Use the raw JSON body directly — do NOT re-serialize the struct
+        // because the listener struct doesn't capture all fields.
+        let job_body = raw_body;
 
         let cancel_token = CancellationToken::new();
         let cancel_for_task = cancel_token.clone();
@@ -254,8 +258,8 @@ impl JobDispatcher {
             .arg("--pipeOut")
             .arg(&socket_path)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .context("Failed to spawn worker process")?;
 
@@ -264,12 +268,17 @@ impl JobDispatcher {
             child.id().unwrap_or(0)
         ));
 
-        // Wait for the worker to connect to the IPC socket
-        trace.info("Waiting for worker to connect to IPC socket...");
-        channel.accept().await.context("Failed to accept worker IPC connection")?;
-        trace.info("Worker connected to IPC socket");
+        // The worker connects TWO channels to the same socket path:
+        //   1. channel_in  (worker reads from this — we send the job here)
+        //   2. channel_out (worker writes to this — we could read results)
+        // We need to accept BOTH connections.
 
-        // Send the job request to the worker
+        // Accept first connection (worker's channel_in)
+        trace.info("Waiting for worker to connect to IPC socket (channel_in)...");
+        channel.accept().await.context("Failed to accept worker IPC connection (channel_in)")?;
+        trace.info("Worker channel_in connected");
+
+        // Send the job request to the worker on the first (inbound) channel
         trace.info("Sending job request to worker via IPC...");
         channel
             .send_async(
@@ -279,6 +288,21 @@ impl JobDispatcher {
             .await
             .context("Failed to send job request to worker via IPC")?;
         trace.info("Job request sent to worker");
+
+        // Accept second connection (worker's channel_out) — we don't actively
+        // read from it right now, but accepting prevents the worker from stalling.
+        trace.info("Accepting worker's second IPC connection (channel_out)...");
+        match channel.accept_second().await {
+            Ok(_stream) => {
+                trace.info("Worker channel_out accepted");
+            }
+            Err(e) => {
+                trace.info(&format!(
+                    "Could not accept second IPC connection (non-fatal): {}",
+                    e
+                ));
+            }
+        }
 
         // Wait for the worker to finish or for cancellation
         let exit_code = tokio::select! {

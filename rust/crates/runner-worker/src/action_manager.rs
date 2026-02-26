@@ -54,8 +54,8 @@ impl ActionManager {
             .get_directory(constants::WellKnownDirectory::Actions);
 
         for step in steps {
-            if let Some(ref action_ref) = step.reference {
-                let cache_key = self.build_cache_key(action_ref);
+            if let Some(action_ref) = step.action_reference() {
+                let cache_key = self.build_cache_key(&action_ref);
 
                 // Check if already resolved
                 if let Some(cached_path) = self.cache.get(&cache_key) {
@@ -67,7 +67,7 @@ impl ActionManager {
 
                 // Resolve the action
                 match self
-                    .resolve_action(context, action_ref, &actions_dir)
+                    .resolve_action(context, &action_ref, &actions_dir)
                     .await
                 {
                     Ok(resolved_path) => {
@@ -328,6 +328,8 @@ mod tests {
             git_ref: "v4".to_string(),
             path: String::new(),
             repository_type: "GitHub".to_string(),
+            ref_type: String::new(),
+            extra: Default::default(),
         };
         assert_eq!(mgr.build_cache_key(&action_ref), "actions/checkout@v4");
     }
@@ -340,6 +342,8 @@ mod tests {
             git_ref: "main".to_string(),
             path: "sub/action".to_string(),
             repository_type: "GitHub".to_string(),
+            ref_type: String::new(),
+            extra: Default::default(),
         };
         assert_eq!(
             mgr.build_cache_key(&action_ref),

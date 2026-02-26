@@ -123,6 +123,22 @@ impl ProcessChannel {
         Ok(())
     }
 
+    /// Accept a second connection from the worker (server side).
+    /// Returns the raw stream without storing it (the first connection is kept).
+    pub async fn accept_second(&mut self) -> Result<UnixStream> {
+        let listener = self
+            .listener
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Server not started; call start_server first"))?;
+
+        let (stream, _addr) = listener
+            .accept()
+            .await
+            .context("Failed to accept second connection on IPC socket")?;
+
+        Ok(stream)
+    }
+
     /// Start the client side (used by the worker process).
     ///
     /// Connects to the Unix domain socket at the given path.

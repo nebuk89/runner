@@ -387,9 +387,10 @@ impl Runner {
                     match message.type_kind() {
                         MessageType::JobRequest => {
                             self.trace.info("Received job request (V1)");
+                            let raw_body = message.body.clone();
                             match serde_json::from_str::<AgentJobRequestMessage>(&message.body) {
                                 Ok(job_request) => {
-                                    if let Err(e) = job_dispatcher.run(&job_request).await {
+                                    if let Err(e) = job_dispatcher.run(&job_request, raw_body).await {
                                         self.trace.error(&format!(
                                             "Failed to dispatch job: {:?}",
                                             e
@@ -432,8 +433,8 @@ impl Runner {
                                         &msg_ref.runner_request_id,
                                         billing_id,
                                     ).await {
-                                        Ok(job_request) => {
-                                            if let Err(e) = job_dispatcher.run(&job_request).await {
+                                        Ok((job_request, raw_body)) => {
+                                            if let Err(e) = job_dispatcher.run(&job_request, raw_body).await {
                                                 self.trace.error(&format!(
                                                     "Failed to dispatch V2 job: {:?}", e
                                                 ));
@@ -774,7 +775,7 @@ impl Runner {
         run_service_url: &str,
         runner_request_id: &str,
         billing_owner_id: &str,
-    ) -> Result<AgentJobRequestMessage> {
+    ) -> Result<(AgentJobRequestMessage, String)> {
         let access_token = listener.get_access_token()
             .ok_or_else(|| anyhow::anyhow!("No access token for acquire job"))?;
 
@@ -819,10 +820,28 @@ impl Runner {
             &body_text[..body_text.len().min(500)]
         ));
 
+        // DEBUG: dump the full acquired job JSON to a file for inspection
+        {
+            let diag_dir = self.context.get_directory(
+                runner_common::constants::WellKnownDirectory::Diag,
+            );
+            let dump_path = diag_dir.join("acquired_job_body.json");
+            if let Err(e) = std::fs::write(&dump_path, &body_text) {
+                self.trace.warning(&format!(
+                    "Failed to write acquired job dump to {:?}: {}", dump_path, e
+                ));
+            } else {
+                self.trace.info(&format!(
+                    "Full acquired job body written to {:?} ({} bytes)",
+                    dump_path, body_text.len()
+                ));
+            }
+        }
+
         let job_message: AgentJobRequestMessage = serde_json::from_str(&body_text)
             .context("Failed to deserialize acquired job message")?;
 
-        Ok(job_message)
+        Ok((job_message, body_text))
     }
 
     // -----------------------------------------------------------------------

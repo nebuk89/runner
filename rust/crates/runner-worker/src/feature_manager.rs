@@ -142,8 +142,8 @@ mod tests {
             job_id: String::new(),
             job_display_name: String::new(),
             request_id: 0,
-            plan_id: String::new(),
-            timeline_id: String::new(),
+            plan: None,
+            timeline: None,
             environment_variables: Default::default(),
             variables: variables
                 .into_iter()
@@ -159,8 +159,9 @@ mod tests {
             file_table: vec![],
             context_data: Default::default(),
             job_container: None,
-            job_service_containers: Default::default(),
+            job_service_containers: None,
             actor: String::new(),
+            extra: Default::default(),
         }
     }
 

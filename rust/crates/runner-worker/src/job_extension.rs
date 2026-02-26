@@ -53,7 +53,7 @@ impl JobExtension {
         }
 
         // Start containers if needed
-        if message.job_container.is_some() || !message.job_service_containers.is_empty() {
+        if message.has_job_container() || message.has_service_containers() {
             if CURRENT_PLATFORM == OsPlatform::Linux {
                 self.container_provider
                     .start_containers_async(context, message)
@@ -103,7 +103,7 @@ impl JobExtension {
                         script: step.script.clone().unwrap_or_default(),
                         shell: step.shell.clone(),
                         working_directory: step.working_directory.clone(),
-                        environment: step.environment.clone(),
+                        environment: step.environment_map(),
                         inputs: step.inputs.clone(),
                     };
                     context.job_steps.push_back(Box::new(run_step));
@@ -124,7 +124,7 @@ impl JobExtension {
                         script: step.script.clone().unwrap_or_default(),
                         shell: step.shell.clone(),
                         working_directory: step.working_directory.clone(),
-                        environment: step.environment.clone(),
+                        environment: step.environment_map(),
                         inputs: step.inputs.clone(),
                     };
                     context.job_steps.push_back(Box::new(run_step));
@@ -142,7 +142,7 @@ impl JobExtension {
         step: &JobStep,
         resolved_actions: &HashMap<String, String>,
     ) -> Result<()> {
-        let action_ref = match &step.reference {
+        let action_ref = match step.action_reference() {
             Some(r) => r,
             None => {
                 context.warning(&format!(
@@ -211,7 +211,7 @@ impl JobExtension {
                     ..action_context.clone()
                 },
                 inputs: step.inputs.clone(),
-                environment: step.environment.clone(),
+                environment: step.environment_map(),
             };
             // Pre steps run as part of the main step queue (at the beginning)
             context.job_steps.push_back(Box::new(pre_step));
@@ -226,7 +226,7 @@ impl JobExtension {
             continue_on_error: step.continue_on_error,
             action_context: action_context.clone(),
             inputs: step.inputs.clone(),
-            environment: step.environment.clone(),
+            environment: step.environment_map(),
         };
         context.job_steps.push_back(Box::new(main_step));
 
@@ -249,7 +249,7 @@ impl JobExtension {
                     ..action_context.clone()
                 },
                 inputs: step.inputs.clone(),
-                environment: step.environment.clone(),
+                environment: step.environment_map(),
             };
             context.post_job_steps.push(Box::new(post_step));
         }

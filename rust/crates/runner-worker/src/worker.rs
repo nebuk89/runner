@@ -15,6 +15,11 @@ use crate::job_runner::JobRunner;
 
 /// Deserialized job request message from the listener.
 /// Maps `Pipelines.AgentJobRequestMessage` from the C# runner.
+///
+/// The C# server uses `CamelCasePropertyNamesContractResolver` which serializes
+/// all property names as camelCase. Complex types like TemplateToken, Plan, and
+/// Timeline are nested objects. Fields we don't fully model yet are captured as
+/// `serde_json::Value` so deserialization never fails.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentJobRequestMessage {
@@ -30,17 +35,19 @@ pub struct AgentJobRequestMessage {
     #[serde(default)]
     pub request_id: u64,
 
-    /// Plan ID for the orchestration plan.
+    /// Plan reference (nested object with planId, scopeIdentifier, etc.).
     #[serde(default)]
-    pub plan_id: String,
+    pub plan: Option<PlanReference>,
 
-    /// Timeline ID for log uploads.
+    /// Timeline reference (nested object with id, changeId, location).
     #[serde(default)]
-    pub timeline_id: String,
+    pub timeline: Option<TimelineReference>,
 
     /// Job-level environment variables.
+    /// In C# this is `List<TemplateToken>` — a list of mapping tokens.
+    /// We deserialize as raw JSON and convert to a flat HashMap later.
     #[serde(default)]
-    pub environment_variables: std::collections::HashMap<String, String>,
+    pub environment_variables: Vec<serde_json::Value>,
 
     /// Variables (name → VariableValueMessage).
     #[serde(default)]
@@ -56,23 +63,23 @@ pub struct AgentJobRequestMessage {
 
     /// Workspace / repository information.
     #[serde(default)]
-    pub workspace: Option<WorkspaceInfo>,
+    pub workspace: Option<serde_json::Value>,
 
-    /// File table entries (for file commands).
+    /// File table entries — just file paths (strings).
     #[serde(default)]
-    pub file_table: Vec<FileTableEntry>,
+    pub file_table: Vec<String>,
 
     /// Context data (github, runner, needs, strategy, matrix, inputs).
     #[serde(default)]
     pub context_data: std::collections::HashMap<String, serde_json::Value>,
 
-    /// Job container definition.
+    /// Job container definition (TemplateToken — complex nested structure).
     #[serde(default)]
-    pub job_container: Option<JobContainerInfo>,
+    pub job_container: Option<serde_json::Value>,
 
-    /// Service containers.
+    /// Service containers (TemplateToken — complex nested structure).
     #[serde(default)]
-    pub job_service_containers: Vec<JobContainerInfo>,
+    pub job_service_containers: Option<serde_json::Value>,
 
     /// Actor requesting the workflow.
     #[serde(default)]
@@ -81,6 +88,90 @@ pub struct AgentJobRequestMessage {
     /// Message type discriminator.
     #[serde(default)]
     pub message_type: String,
+
+    /// Catch-all for any extra fields we don't explicitly handle.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl AgentJobRequestMessage {
+    /// Extract the plan ID from the nested plan reference.
+    pub fn plan_id(&self) -> String {
+        self.plan
+            .as_ref()
+            .map(|p| p.plan_id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Extract the timeline ID from the nested timeline reference.
+    pub fn timeline_id(&self) -> String {
+        self.timeline
+            .as_ref()
+            .map(|t| t.id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Convert the TemplateToken environment variables into a flat HashMap.
+    /// TemplateTokens are complex polymorphic types from C#. Simple scalars
+    /// serialize as plain JSON values; mappings use `{"type": 2, "map": [...]}`.
+    pub fn environment_variables_map(&self) -> std::collections::HashMap<String, String> {
+        let mut result = std::collections::HashMap::new();
+        for token in &self.environment_variables {
+            Self::extract_env_from_template_token(token, &mut result);
+        }
+        result
+    }
+
+    fn extract_env_from_template_token(
+        token: &serde_json::Value,
+        out: &mut std::collections::HashMap<String, String>,
+    ) {
+        // TemplateToken serialisation:
+        // - If the token is a plain JSON object with a "map" array, it's a
+        //   MappingToken where entries alternate key, value, key, value, ...
+        // - Each sub-token that's a plain string/number/bool is a literal.
+        // - Sub-tokens can also be objects with a "lit" field.
+        if let Some(obj) = token.as_object() {
+            if let Some(map_arr) = obj.get("map").and_then(|v| v.as_array()) {
+                // Pairs: key, value, key, value, ...
+                let mut iter = map_arr.iter();
+                while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
+                    let key = Self::template_token_to_string(k);
+                    let val = Self::template_token_to_string(v);
+                    if let (Some(k), Some(v)) = (key, val) {
+                        out.insert(k, v);
+                    }
+                }
+            }
+        }
+    }
+
+    fn template_token_to_string(token: &serde_json::Value) -> Option<String> {
+        match token {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            serde_json::Value::Object(obj) => {
+                // Object form: {"type": N, "lit": "value"} or similar
+                obj.get("lit")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if job containers are defined.
+    pub fn has_job_container(&self) -> bool {
+        self.job_container.as_ref().map_or(false, |v| !v.is_null())
+    }
+
+    /// Check if service containers are defined.
+    pub fn has_service_containers(&self) -> bool {
+        self.job_service_containers
+            .as_ref()
+            .map_or(false, |v| !v.is_null())
+    }
 }
 
 /// Variable value from the job message.
@@ -95,6 +186,7 @@ pub struct VariableValueMessage {
 }
 
 /// A single step definition from the job message.
+/// C# uses polymorphic ActionStep : TaskStep : Step with type discriminators.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobStep {
@@ -114,27 +206,29 @@ pub struct JobStep {
     #[serde(default)]
     pub timeout_in_minutes: u32,
 
-    /// Type of step: "script", "action", etc.
-    #[serde(default)]
+    /// Type of step: C# StepType enum serialized as string ("action").
+    /// The C# JSON key is "type" (camelCased from "Type").
+    #[serde(default, rename = "type")]
     pub step_type: String,
 
     /// Reference for action steps (e.g. "actions/checkout@v4").
+    /// C# uses polymorphic ActionStepDefinitionReference.
     #[serde(default)]
-    pub reference: Option<ActionReference>,
+    pub reference: Option<serde_json::Value>,
 
     /// Inline inputs / with values.
     #[serde(default)]
     pub inputs: std::collections::HashMap<String, String>,
 
-    /// Step-level environment variables.
+    /// Step-level environment variables (TemplateToken in C#).
     #[serde(default)]
-    pub environment: std::collections::HashMap<String, String>,
+    pub environment: Option<serde_json::Value>,
 
     /// Continue on error flag.
     #[serde(default)]
     pub continue_on_error: bool,
 
-    /// The script body for run steps.
+    /// The script body for run steps (not a top-level field in C#, extracted from inputs).
     #[serde(default)]
     pub script: Option<String>,
 
@@ -145,9 +239,67 @@ pub struct JobStep {
     /// Working directory override.
     #[serde(default)]
     pub working_directory: Option<String>,
+
+    /// Whether the step is enabled (C# default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Context name for the step (C# ActionStep.ContextName).
+    #[serde(default)]
+    pub context_name: Option<String>,
+
+    /// Catch-all for extra step fields.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl JobStep {
+    /// Extract the action reference as a structured type if possible.
+    pub fn action_reference(&self) -> Option<ActionReference> {
+        self.reference
+            .as_ref()
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// Extract the environment as a flat HashMap.
+    /// C# sends environment as TemplateToken or a simple mapping.
+    pub fn environment_map(&self) -> std::collections::HashMap<String, String> {
+        let mut result = std::collections::HashMap::new();
+        if let Some(ref env_val) = self.environment {
+            // If it's a simple JSON object with string values, extract directly
+            if let Some(obj) = env_val.as_object() {
+                // Check if it looks like a TemplateToken (has "type" and "map" fields)
+                if let Some(map_arr) = obj.get("map").and_then(|v| v.as_array()) {
+                    let mut iter = map_arr.iter();
+                    while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
+                        if let (Some(key), Some(val)) = (
+                            AgentJobRequestMessage::template_token_to_string(k),
+                            AgentJobRequestMessage::template_token_to_string(v),
+                        ) {
+                            result.insert(key, val);
+                        }
+                    }
+                } else {
+                    // Simple object mapping
+                    for (k, v) in obj {
+                        if let Some(s) = v.as_str() {
+                            result.insert(k.clone(), s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
 }
 
 /// Action reference in a step.
+/// C# has polymorphic ActionStepDefinitionReference with subclasses
+/// RepositoryPathReference, ContainerRegistryReference, ScriptReference.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionReference {
@@ -159,14 +311,53 @@ pub struct ActionReference {
     pub path: String,
     #[serde(default)]
     pub repository_type: String,
+    /// Type discriminator from C# ("repository", "containerRegistry", "script").
+    #[serde(default, rename = "type")]
+    pub ref_type: String,
+    /// Catch-all for extra reference fields.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
-/// Job resources – service endpoints.
+/// Plan reference from the job message.
+/// Maps to C# `TaskOrchestrationPlanReference`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanReference {
+    #[serde(default)]
+    pub scope_identifier: String,
+    #[serde(default)]
+    pub plan_type: String,
+    #[serde(default)]
+    pub plan_id: String,
+    /// Catch-all for extra plan fields.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Timeline reference from the job message.
+/// Maps to C# `TimelineReference`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineReference {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub change_id: i64,
+    #[serde(default)]
+    pub location: Option<String>,
+}
+
+/// Job resources – service endpoints, container registries, repositories.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobResources {
     #[serde(default)]
     pub endpoints: Vec<ServiceEndpoint>,
+    #[serde(default)]
+    pub repositories: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub containers: Vec<serde_json::Value>,
 }
 
 /// A service endpoint for server communication.
@@ -193,29 +384,15 @@ pub struct EndpointAuthorization {
     pub parameters: std::collections::HashMap<String, String>,
 }
 
-/// Workspace information.
+/// Workspace information. C# `WorkspaceOptions` only has `clean`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
     #[serde(default)]
     pub clean: Option<String>,
-    #[serde(default)]
-    pub directory: Option<String>,
 }
 
-/// File table entry for file commands (GITHUB_ENV, GITHUB_PATH, etc.).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileTableEntry {
-    #[serde(default)]
-    pub file_table_id: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub path: String,
-}
-
-/// Job container configuration.
+/// Job container configuration (used after parsing TemplateToken).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobContainerInfo {
@@ -291,13 +468,48 @@ impl Worker {
 
         trace.info("Received job message from listener.");
 
+        // Log the raw body length for diagnostics
+        trace.info(&format!(
+            "Job message body size: {} bytes",
+            msg.body.len()
+        ));
+
+        // Log a preview of the body (first 500 chars) for debugging
+        let preview: String = msg.body.chars().take(500).collect();
+        trace.info(&format!("Job message preview: {}", preview));
+
         // Deserialize the job message
-        let job_message: AgentJobRequestMessage = serde_json::from_str(&msg.body)
-            .context("Failed to deserialize AgentJobRequestMessage")?;
+        let job_message: AgentJobRequestMessage = match serde_json::from_str(&msg.body) {
+            Ok(m) => m,
+            Err(e) => {
+                trace.error(&format!(
+                    "Failed to deserialize AgentJobRequestMessage: {}",
+                    e
+                ));
+                // Log more body context for debugging
+                let extended_preview: String = msg.body.chars().take(2000).collect();
+                trace.error(&format!("Raw body (first 2000 chars): {}", extended_preview));
+                return Err(anyhow::anyhow!(
+                    "Failed to deserialize AgentJobRequestMessage: {}",
+                    e
+                ));
+            }
+        };
 
         trace.info(&format!(
             "Job: {} ({})",
             job_message.job_display_name, job_message.job_id
+        ));
+        trace.info(&format!(
+            "Plan ID: {}, Timeline ID: {}",
+            job_message.plan_id(),
+            job_message.timeline_id()
+        ));
+        trace.info(&format!(
+            "Steps: {}, Variables: {}, Endpoints: {}",
+            job_message.steps.len(),
+            job_message.variables.len(),
+            job_message.resources.endpoints.len()
         ));
 
         // Initialize secret masker from job variables
@@ -361,21 +573,8 @@ impl Worker {
             }
         }
 
-        // Mask container credentials
-        if let Some(ref container) = message.job_container {
-            if let Some(ref creds) = container.credentials {
-                if !creds.password.is_empty() {
-                    masker.add_value(&creds.password);
-                }
-            }
-        }
-        for svc in &message.job_service_containers {
-            if let Some(ref creds) = svc.credentials {
-                if !creds.password.is_empty() {
-                    masker.add_value(&creds.password);
-                }
-            }
-        }
+        // Container credentials are in TemplateToken format now.
+        // We'll add masking for those when we implement proper container support.
     }
 
     /// Listen for cancellation / shutdown messages from the listener.
@@ -436,6 +635,30 @@ mod tests {
         assert_eq!(msg.job_id, "abc-123");
         assert_eq!(msg.job_display_name, "Test Job");
         assert!(msg.steps.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_with_plan_and_timeline() {
+        let json = r#"{
+            "jobId": "abc-123",
+            "jobDisplayName": "Test Job",
+            "plan": {"planId": "plan-1", "scopeIdentifier": "scope-1"},
+            "timeline": {"id": "tl-1", "changeId": 5}
+        }"#;
+        let msg: AgentJobRequestMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.plan_id(), "plan-1");
+        assert_eq!(msg.timeline_id(), "tl-1");
+    }
+
+    #[test]
+    fn test_deserialize_file_table_as_strings() {
+        let json = r#"{
+            "jobId": "abc-123",
+            "fileTable": [".github/workflows/test.yaml", "action.yml"]
+        }"#;
+        let msg: AgentJobRequestMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.file_table.len(), 2);
+        assert_eq!(msg.file_table[0], ".github/workflows/test.yaml");
     }
 
     #[test]
