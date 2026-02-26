@@ -1,0 +1,975 @@
+{
+ "fileTable": [
+  ".github/workflows/test_mac.yaml"
+ ],
+ "mask": [
+  {
+   "type": "regex",
+   "value": "\\b(?:eyJ0eXAiOi|eyJhbGciOi|eyJ4NXQiOi|eyJraWQiOi)[^\\s'\";]+"
+  },
+  {
+   "type": "regex",
+   "value": "\\bBearer\\s+[^\\s'\";]+"
+  },
+  {
+   "type": "regex",
+   "value": "\\b(?i:Password|Pwd)=(?:[^\\s'\";]+|\"[^\"]+\")"
+  },
+  {
+   "type": "regex",
+   "value": "\\s+-(?i:Password|Pwd)\\s+(?:[^\\s'\";]+|\"[^\"]+\")"
+  },
+  {
+   "type": "regex",
+   "value": "\\bv1\\.[0-9A-Fa-f]{40}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "\\bgh[pousr]{1}_[A-Za-z0-9]{36}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "\\bgithub_pat_[0-9][A-Za-z0-9]{21}_[A-Za-z0-9]{59}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "(?:[a-zA-Z][a-zA-Z\\d+-.]*):\\/\\/([a-zA-Z\\d\\-._~\\!$\u0026'()*+,;=%]+):([a-zA-Z\\d\\-._~\\!$\u0026'()*+,;=:%]*)@"
+  },
+  {
+   "type": "regex",
+   "value": "\\b[0-9A-Za-z-_~.]{3}7Q~[0-9A-Za-z-_~.]{31}\\b|\\b[0-9A-Za-z-_~.]{3}8Q~[0-9A-Za-z-_~.]{34}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "(?:^|[^0-9A-Za-z+/])[0-9A-Za-z+/]{76}(APIM|ACDb|\\+(ABa|AMC|ASt))[0-9A-Za-z+/]{5}[AQgw]=="
+  },
+  {
+   "type": "regex",
+   "value": "(?:^|[^0-9A-Za-z+/])[0-9A-Za-z+/]{33}(AIoT|\\+(ASb|AEh|ARm))[A-P][0-9A-Za-z+/]{5}="
+  },
+  {
+   "type": "regex",
+   "value": "\\b[0-9A-Za-z_\\-]{44}AzFu[0-9A-Za-z\\-_]{5}[AQgw]=="
+  },
+  {
+   "type": "regex",
+   "value": "\\b[0-9A-Za-z]{42}AzSe[A-D][0-9A-Za-z]{5}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "\\b[0-9A-Za-z+/]{42}\\+ACR[A-D][0-9A-Za-z+/]{5}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "\\b[0-9A-Za-z]{33}AzCa[A-P][0-9A-Za-z]{5}="
+  },
+  {
+   "type": "regex",
+   "value": "\\boy2[a-p][0-9a-z]{15}[aq][0-9a-z]{11}[eu][bdfhjlnprtvxz357][a-p][0-9a-z]{11}[aeimquy4]\\b"
+  },
+  {
+   "type": "regex",
+   "value": "\\bnpm_[0-9A-Za-z]{36}\\b"
+  },
+  {
+   "type": "regex",
+   "value": "\\bx-ghcr-signature=[^\u0026]+"
+  }
+ ],
+ "steps": [
+  {
+   "type": "action",
+   "reference": {
+    "type": "script"
+   },
+   "id": "a1acb8d1-9e9f-40f5-9f37-21a6d2caf952",
+   "contextName": "__run",
+   "name": "__run",
+   "displayNameToken": {
+    "type": 0,
+    "file": 1,
+    "line": 17,
+    "col": 15,
+    "lit": "Fetch current weather"
+   },
+   "condition": "success()",
+   "continueOnError": null,
+   "timeoutInMinutes": null,
+   "inputs": {
+    "type": 2,
+    "map": [
+     {
+      "Key": {
+       "type": 0,
+       "lit": "script"
+      },
+      "Value": {
+       "type": 0,
+       "file": 1,
+       "line": 18,
+       "col": 14,
+       "lit": "echo \"🌤  Local Weather Report — $(date '+%Y-%m-%d %H:%M:%S')\"\necho \"=============================================\"\necho \"\"\n\n# wttr.in returns a nice compact forecast; ?format=... gives one-liners\nCITY=\"${WEATHER_CITY:-London}\"\necho \"📍 Location: $CITY\"\necho \"\"\n\n# One-line summary: condition, temp, wind, humidity\nSUMMARY=$(curl -sf \"https://wttr.in/${CITY}?format=%C+%t+💨+%w+💧+%h\" || echo \"⚠️  Could not reach wttr.in\")\necho \"Current : $SUMMARY\"\necho \"\"\n\n# 3-day compact forecast (narrow terminal version)\necho \"--- 3-day forecast ---\"\nFORECAST=$(curl -sf \"https://wttr.in/${CITY}?format=v2\u0026n\" || echo \"(forecast unavailable)\")\necho \"$FORECAST\"\necho \"\"\necho \"✅ Done\"\n\n# Write job summary for GitHub Actions\nif [ -n \"$GITHUB_STEP_SUMMARY\" ]; then\n  {\n    echo \"## 🌤 Weather Report — $CITY\"\n    echo \"\"\n    echo \"**Date:** $(date '+%Y-%m-%d %H:%M:%S %Z')\"\n    echo \"\"\n    echo \"### Current Conditions\"\n    echo \"\"\n    echo '```'\n    echo \"$SUMMARY\"\n    echo '```'\n    echo \"\"\n    echo \"### 3-Day Forecast\"\n    echo \"\"\n    echo '```'\n    echo \"$FORECAST\"\n    echo '```'\n  } \u003e\u003e \"$GITHUB_STEP_SUMMARY\"\nfi\n"
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "variables": {
+  "Actions.EnableHttpRedirects": {
+   "value": "true"
+  },
+  "DistributedTask.AddWarningToNode12Action": {
+   "value": "true"
+  },
+  "DistributedTask.AddWarningToNode16Action": {
+   "value": "true"
+  },
+  "DistributedTask.AllowRunnerContainerHooks": {
+   "value": "true"
+  },
+  "DistributedTask.DeprecateStepOutputCommands": {
+   "value": "true"
+  },
+  "DistributedTask.DetailUntarFailure": {
+   "value": "true"
+  },
+  "DistributedTask.EnableCompositeActions": {
+   "value": "true"
+  },
+  "DistributedTask.EnableJobServerQueueTelemetry": {
+   "value": "true"
+  },
+  "DistributedTask.EnhancedAnnotations": {
+   "value": "true"
+  },
+  "DistributedTask.ForceGithubJavascriptActionsToNode16": {
+   "value": "true"
+  },
+  "DistributedTask.ForceGithubJavascriptActionsToNode20": {
+   "value": "true"
+  },
+  "DistributedTask.LogTemplateErrorsAsDebugMessages": {
+   "value": "true"
+  },
+  "DistributedTask.MarkJobAsFailedOnWorkerCrash": {
+   "value": "true"
+  },
+  "DistributedTask.NewActionMetadata": {
+   "value": "true"
+  },
+  "DistributedTask.UploadStepSummary": {
+   "value": "true"
+  },
+  "DistributedTask.UseActionArchiveCache": {
+   "value": "true"
+  },
+  "DistributedTask.UseWhich2": {
+   "value": "true"
+  },
+  "RunService.FixEmbeddedIssues": {
+   "value": "true"
+  },
+  "actions_add_check_run_id_to_job_context": {
+   "value": "true"
+  },
+  "actions_container_action_runner_temp": {
+   "value": "true"
+  },
+  "actions_display_helpful_actions_download_errors": {
+   "value": "true"
+  },
+  "actions_runner_compare_workflow_parser": {
+   "value": "false"
+  },
+  "actions_runner_emit_composite_markers": {
+   "value": "false"
+  },
+  "actions_set_orchestration_id_env_for_actions": {
+   "value": "true"
+  },
+  "actions_skip_retry_complete_job_upon_known_errors": {
+   "value": "true"
+  },
+  "actions_uses_cache_service_v2": {
+   "value": "true"
+  },
+  "github_token": {
+   "value": "ghs_nZM8Pd95DZR9OLCzlgCmgqSAv0gHA51CxeH4",
+   "isSecret": true
+  },
+  "system.from_run_service": {
+   "value": "true"
+  },
+  "system.github.job": {
+   "value": "weather"
+  },
+  "system.github.launch_endpoint": {
+   "value": "https://launch.actions.githubusercontent.com"
+  },
+  "system.github.results_endpoint": {
+   "value": "https://results-receiver.actions.githubusercontent.com/"
+  },
+  "system.github.results_upload_with_sdk": {
+   "value": "true"
+  },
+  "system.github.token": {
+   "value": "ghs_nZM8Pd95DZR9OLCzlgCmgqSAv0gHA51CxeH4",
+   "isSecret": true
+  },
+  "system.github.token.permissions": {
+   "value": "{\"Contents\":\"read\",\"Metadata\":\"read\",\"Packages\":\"read\"}"
+  },
+  "system.orchestrationId": {
+   "value": "1e959c2e-67d7-4e0d-bb94-b0776c92ee32.weather.__default"
+  },
+  "system.phaseDisplayName": {
+   "value": "weather"
+  },
+  "system.runner.lowdiskspacethreshold": {
+   "value": "100"
+  },
+  "system.runnerEnvironment": {
+   "value": "self-hosted"
+  },
+  "system.runnerGroupName": {
+   "value": "Default"
+  }
+ },
+ "messageType": "RunnerJobRequest",
+ "plan": {
+  "planType": "actions",
+  "version": 0,
+  "planId": "1e959c2e-67d7-4e0d-bb94-b0776c92ee32",
+  "artifactUri": "",
+  "artifactLocation": ""
+ },
+ "timeline": {
+  "id": "1e959c2e-67d7-4e0d-bb94-b0776c92ee32",
+  "changeId": 0,
+  "location": null
+ },
+ "jobId": "abf462ee-81a6-5617-b7b1-28dd69aa86af",
+ "jobDisplayName": "weather",
+ "jobName": "__default",
+ "requestId": 0,
+ "lockedUntil": "0001-01-01T00:00:00",
+ "environmentVariables": [],
+ "defaults": [],
+ "jobOutputs": null,
+ "jobContainer": null,
+ "jobServiceContainers": null,
+ "resources": {
+  "endpoints": [
+   {
+    "data": {
+     "ServerId": "",
+     "ServerName": "",
+     "CacheServerUrl": "https://artifactcache.actions.githubusercontent.com/JaPbvVpV66hOaFvavtEoBZZEgLISNqJoCHVqsytv8vQS2qYOuW/",
+     "FeedStreamUrl": "wss://results-receiver.actions.githubusercontent.com/_ws/ingest.sock",
+     "ResultsServiceUrl": "https://results-receiver.actions.githubusercontent.com/",
+     "PipelinesServiceUrl": "https://pipelinesghubeus12.actions.githubusercontent.com/JaPbvVpV66hOaFvavtEoBZZEgLISNqJoCHVqsytv8vQS2qYOuW/",
+     "GenerateIdTokenUrl": "",
+     "ConnectivityChecks": "[\"https://broker.actions.githubusercontent.com/health\",\"https://token.actions.githubusercontent.com/ready\",\"https://run.actions.githubusercontent.com/health\"]"
+    },
+    "name": "SystemVssConnection",
+    "url": "https://run-actions-3-azure-eastus.actions.githubusercontent.com/68/",
+    "authorization": {
+     "parameters": {
+      "AccessToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjM4ODI2YjE3LTZhMzAtNWY5Yi1iMTY5LThiZWI4MjAyZjcyMyIsInR5cCI6IkpXVCIsIng1dCI6InlrTmFZNHFNX3RhNGsyVGdaT0NFWUxrY1lsQSJ9.eyJJZGVudGl0eVR5cGVDbGFpbSI6IlN5c3RlbTpTZXJ2aWNlSWRlbnRpdHkiLCJhYyI6Ilt7XCJTY29wZVwiOlwicmVmcy9oZWFkcy9tYWluXCIsXCJQZXJtaXNzaW9uXCI6M31dIiwiYWNzbCI6IjEwIiwiYXVkIjoidnNvOmU2ODAxNWJlLThhZjAtNDA4Ni04NzVkLWQ0YWFmODkyN2U5NyIsImJpbGxpbmdfb3duZXJfaWQiOiJVX2tnRE9BQ3pXWmciLCJleHAiOjE3NzIxNTQwNDEsImh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vd3MvMjAwOC8wNi9pZGVudGl0eS9jbGFpbXMvcHJpbWFyeXNpZCI6ImRkZGRkZGRkLWRkZGQtZGRkZC1kZGRkLWRkZGRkZGRkZGRkZCIsImh0dHA6Ly9zY2hlbWFzLnhtbHNvYXAub3JnL3dzLzIwMDUvMDUvaWRlbnRpdHkvY2xhaW1zL3NpZCI6ImRkZGRkZGRkLWRkZGQtZGRkZC1kZGRkLWRkZGRkZGRkZGRkZCIsImlhdCI6MTc3MjEzMTg0MSwiaXNzIjoiaHR0cHM6Ly90b2tlbi5hY3Rpb25zLmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImpvYl9pZCI6ImFiZjQ2MmVlLTgxYTYtNTYxNy1iN2IxLTI4ZGQ2OWFhODZhZiIsIm5hbWVpZCI6ImRkZGRkZGRkLWRkZGQtZGRkZC1kZGRkLWRkZGRkZGRkZGRkZCIsIm5iZiI6MTc3MjEzMTU0MSwib3JjaF9pZCI6IjFlOTU5YzJlLTY3ZDctNGUwZC1iYjk0LWIwNzc2YzkyZWUzMi53ZWF0aGVyLl9fZGVmYXVsdCIsIm93bmVyX2lkIjoiUl9rZ0RPUlpqelZnIiwicGxhbl9pZCI6IjFlOTU5YzJlLTY3ZDctNGUwZC1iYjk0LWIwNzc2YzkyZWUzMiIsInJlcG9zaXRvcnlfaWQiOiIxMTY3NjUxNjcwIiwicnVuX2lkIjoiMjI0NTYzNTczODQiLCJydW5fbnVtYmVyIjoiMzEiLCJydW5fdHlwZSI6ImZ1bGwiLCJydW5uZXJfaWQiOiIxNCIsInJ1bm5lcl90eXBlIjoic2VsZi1ob3N0ZWQiLCJzY3AiOiJBY3Rpb25zLlJlc3VsdHM6MWU5NTljMmUtNjdkNy00ZTBkLWJiOTQtYjA3NzZjOTJlZTMyOmFiZjQ2MmVlLTgxYTYtNTYxNy1iN2IxLTI4ZGQ2OWFhODZhZiBBY3Rpb25zLlJ1bm5lcjoxZTk1OWMyZS02N2Q3LTRlMGQtYmI5NC1iMDc3NmM5MmVlMzI6YWJmNDYyZWUtODFhNi01NjE3LWI3YjEtMjhkZDY5YWE4NmFmIEFjdGlvbnMuVXBsb2FkQXJ0aWZhY3RzOjFlOTU5YzJlLTY3ZDctNGUwZC1iYjk0LWIwNzc2YzkyZWUzMjphYmY0NjJlZS04MWE2LTU2MTctYjdiMS0yOGRkNjlhYTg2YWYgQWN0aW9ucy5HZW5lcmljUmVhZDowMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDAiLCJzaGEiOiJjZjQ1YTFlYmZjM2NjZmE4NWE3ODBhZGYxMGEzZmQ5MzIwMDc4ZjQ0IiwidHJ1c3RfdGllciI6IjEifQ.JtMVqhq-RIWOtvaMIiuw3suu4Y8R2F_ypCkjzpfkgiW7WzWTgyl8OPMKEgxf1wJ5-SWbIORtDTFI52pImB75a60H0DY_eAV3Q6lA_EEZC0V-7QtKi_AYUU0kXUdK6TfCx7loaNNv2kWtf10aZ37r5JJv-qyKOeftZvAmPsVcoism9pEQNrUrlLlVXTlXJi9sTgc8kW2YUsjOerSrp0_KMhwd6ygQMy13XtfKCYRMGhrsfKHMFPLblMejYwmd4koIAmmn3AB38ajERlUuKjCFZXZa44NmY2pbz79MmJzJP54VTwusFvSRet7xkOj_i9IeerdvAp5x66cJbF7OMsUOPg"
+     },
+     "scheme": "OAuth"
+    },
+    "isShared": false,
+    "isReady": true
+   }
+  ]
+ },
+ "contextData": {
+  "github": {
+   "t": 2,
+   "d": [
+    {
+     "k": "ref",
+     "v": "refs/heads/main"
+    },
+    {
+     "k": "sha",
+     "v": "cf45a1ebfc3ccfa85a780adf10a3fd9320078f44"
+    },
+    {
+     "k": "repository",
+     "v": "nebuk89/test-small-workflows"
+    },
+    {
+     "k": "repository_owner",
+     "v": "nebuk89"
+    },
+    {
+     "k": "repository_owner_id",
+     "v": "2938470"
+    },
+    {
+     "k": "repositoryUrl",
+     "v": "git://github.com/nebuk89/test-small-workflows.git"
+    },
+    {
+     "k": "run_id",
+     "v": "22456357384"
+    },
+    {
+     "k": "run_number",
+     "v": "31"
+    },
+    {
+     "k": "retention_days",
+     "v": "90"
+    },
+    {
+     "k": "run_attempt",
+     "v": "1"
+    },
+    {
+     "k": "artifact_cache_size_limit",
+     "v": "10"
+    },
+    {
+     "k": "repository_visibility",
+     "v": "private"
+    },
+    {
+     "k": "actor_id",
+     "v": "2938470"
+    },
+    {
+     "k": "actor",
+     "v": "nebuk89"
+    },
+    {
+     "k": "workflow",
+     "v": "local_weather_report"
+    },
+    {
+     "k": "head_ref",
+     "v": ""
+    },
+    {
+     "k": "base_ref",
+     "v": ""
+    },
+    {
+     "k": "event_name",
+     "v": "workflow_dispatch"
+    },
+    {
+     "k": "server_url",
+     "v": "https://github.com"
+    },
+    {
+     "k": "api_url",
+     "v": "https://api.github.com"
+    },
+    {
+     "k": "graphql_url",
+     "v": "https://api.github.com/graphql"
+    },
+    {
+     "k": "ref_name",
+     "v": "main"
+    },
+    {
+     "k": "ref_protected",
+     "v": false
+    },
+    {
+     "k": "ref_type",
+     "v": "branch"
+    },
+    {
+     "k": "secret_source",
+     "v": "Actions"
+    },
+    {
+     "k": "event",
+     "v": {
+      "t": 2,
+      "d": [
+       {
+        "k": "ref",
+        "v": "refs/heads/main"
+       },
+       {
+        "k": "workflow",
+        "v": ".github/workflows/test_mac.yaml"
+       },
+       {
+        "k": "inputs",
+        "v": null
+       },
+       {
+        "k": "repository",
+        "v": {
+         "t": 2,
+         "d": [
+          {
+           "k": "id",
+           "v": 1167651670
+          },
+          {
+           "k": "node_id",
+           "v": "R_kgDORZjzVg"
+          },
+          {
+           "k": "name",
+           "v": "test-small-workflows"
+          },
+          {
+           "k": "full_name",
+           "v": "nebuk89/test-small-workflows"
+          },
+          {
+           "k": "private",
+           "v": true
+          },
+          {
+           "k": "owner",
+           "v": {
+            "t": 2,
+            "d": [
+             {
+              "k": "login",
+              "v": "nebuk89"
+             },
+             {
+              "k": "id",
+              "v": 2938470
+             },
+             {
+              "k": "node_id",
+              "v": "MDQ6VXNlcjI5Mzg0NzA="
+             },
+             {
+              "k": "avatar_url",
+              "v": "https://avatars.githubusercontent.com/u/2938470?v=4"
+             },
+             {
+              "k": "gravatar_id",
+              "v": ""
+             },
+             {
+              "k": "url",
+              "v": "https://api.github.com/users/nebuk89"
+             },
+             {
+              "k": "html_url",
+              "v": "https://github.com/nebuk89"
+             },
+             {
+              "k": "followers_url",
+              "v": "https://api.github.com/users/nebuk89/followers"
+             },
+             {
+              "k": "following_url",
+              "v": "https://api.github.com/users/nebuk89/following{/other_user}"
+             },
+             {
+              "k": "gists_url",
+              "v": "https://api.github.com/users/nebuk89/gists{/gist_id}"
+             },
+             {
+              "k": "starred_url",
+              "v": "https://api.github.com/users/nebuk89/starred{/owner}{/repo}"
+             },
+             {
+              "k": "subscriptions_url",
+              "v": "https://api.github.com/users/nebuk89/subscriptions"
+             },
+             {
+              "k": "organizations_url",
+              "v": "https://api.github.com/users/nebuk89/orgs"
+             },
+             {
+              "k": "repos_url",
+              "v": "https://api.github.com/users/nebuk89/repos"
+             },
+             {
+              "k": "events_url",
+              "v": "https://api.github.com/users/nebuk89/events{/privacy}"
+             },
+             {
+              "k": "received_events_url",
+              "v": "https://api.github.com/users/nebuk89/received_events"
+             },
+             {
+              "k": "type",
+              "v": "User"
+             },
+             {
+              "k": "user_view_type",
+              "v": "public"
+             },
+             {
+              "k": "site_admin",
+              "v": true
+             }
+            ]
+           }
+          },
+          {
+           "k": "html_url",
+           "v": "https://github.com/nebuk89/test-small-workflows"
+          },
+          {
+           "k": "description",
+           "v": null
+          },
+          {
+           "k": "fork",
+           "v": false
+          },
+          {
+           "k": "url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows"
+          },
+          {
+           "k": "forks_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/forks"
+          },
+          {
+           "k": "keys_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/keys{/key_id}"
+          },
+          {
+           "k": "collaborators_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/collaborators{/collaborator}"
+          },
+          {
+           "k": "teams_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/teams"
+          },
+          {
+           "k": "hooks_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/hooks"
+          },
+          {
+           "k": "issue_events_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/issues/events{/number}"
+          },
+          {
+           "k": "events_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/events"
+          },
+          {
+           "k": "assignees_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/assignees{/user}"
+          },
+          {
+           "k": "branches_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/branches{/branch}"
+          },
+          {
+           "k": "tags_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/tags"
+          },
+          {
+           "k": "blobs_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/git/blobs{/sha}"
+          },
+          {
+           "k": "git_tags_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/git/tags{/sha}"
+          },
+          {
+           "k": "git_refs_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/git/refs{/sha}"
+          },
+          {
+           "k": "trees_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/git/trees{/sha}"
+          },
+          {
+           "k": "statuses_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/statuses/{sha}"
+          },
+          {
+           "k": "languages_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/languages"
+          },
+          {
+           "k": "stargazers_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/stargazers"
+          },
+          {
+           "k": "contributors_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/contributors"
+          },
+          {
+           "k": "subscribers_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/subscribers"
+          },
+          {
+           "k": "subscription_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/subscription"
+          },
+          {
+           "k": "commits_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/commits{/sha}"
+          },
+          {
+           "k": "git_commits_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/git/commits{/sha}"
+          },
+          {
+           "k": "comments_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/comments{/number}"
+          },
+          {
+           "k": "issue_comment_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/issues/comments{/number}"
+          },
+          {
+           "k": "contents_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/contents/{+path}"
+          },
+          {
+           "k": "compare_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/compare/{base}...{head}"
+          },
+          {
+           "k": "merges_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/merges"
+          },
+          {
+           "k": "archive_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/{archive_format}{/ref}"
+          },
+          {
+           "k": "downloads_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/downloads"
+          },
+          {
+           "k": "issues_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/issues{/number}"
+          },
+          {
+           "k": "pulls_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/pulls{/number}"
+          },
+          {
+           "k": "milestones_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/milestones{/number}"
+          },
+          {
+           "k": "notifications_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/notifications{?since,all,participating}"
+          },
+          {
+           "k": "labels_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/labels{/name}"
+          },
+          {
+           "k": "releases_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/releases{/id}"
+          },
+          {
+           "k": "deployments_url",
+           "v": "https://api.github.com/repos/nebuk89/test-small-workflows/deployments"
+          },
+          {
+           "k": "created_at",
+           "v": "2026-02-26T14:32:08Z"
+          },
+          {
+           "k": "updated_at",
+           "v": "2026-02-26T16:53:34Z"
+          },
+          {
+           "k": "pushed_at",
+           "v": "2026-02-26T16:53:30Z"
+          },
+          {
+           "k": "git_url",
+           "v": "git://github.com/nebuk89/test-small-workflows.git"
+          },
+          {
+           "k": "ssh_url",
+           "v": "git@github.com:nebuk89/test-small-workflows.git"
+          },
+          {
+           "k": "clone_url",
+           "v": "https://github.com/nebuk89/test-small-workflows.git"
+          },
+          {
+           "k": "svn_url",
+           "v": "https://github.com/nebuk89/test-small-workflows"
+          },
+          {
+           "k": "homepage",
+           "v": null
+          },
+          {
+           "k": "size",
+           "v": 5
+          },
+          {
+           "k": "stargazers_count",
+           "v": 0
+          },
+          {
+           "k": "watchers_count",
+           "v": 0
+          },
+          {
+           "k": "language",
+           "v": null
+          },
+          {
+           "k": "has_issues",
+           "v": true
+          },
+          {
+           "k": "has_projects",
+           "v": true
+          },
+          {
+           "k": "has_downloads",
+           "v": true
+          },
+          {
+           "k": "has_wiki",
+           "v": true
+          },
+          {
+           "k": "has_pages",
+           "v": false
+          },
+          {
+           "k": "has_discussions",
+           "v": false
+          },
+          {
+           "k": "forks_count",
+           "v": 0
+          },
+          {
+           "k": "mirror_url",
+           "v": null
+          },
+          {
+           "k": "archived",
+           "v": false
+          },
+          {
+           "k": "disabled",
+           "v": false
+          },
+          {
+           "k": "open_issues_count",
+           "v": 1
+          },
+          {
+           "k": "license",
+           "v": null
+          },
+          {
+           "k": "allow_forking",
+           "v": true
+          },
+          {
+           "k": "is_template",
+           "v": false
+          },
+          {
+           "k": "web_commit_signoff_required",
+           "v": false
+          },
+          {
+           "k": "has_pull_requests",
+           "v": true
+          },
+          {
+           "k": "pull_request_creation_policy",
+           "v": "all"
+          },
+          {
+           "k": "topics",
+           "v": {
+            "t": 1,
+            "a": []
+           }
+          },
+          {
+           "k": "visibility",
+           "v": "private"
+          },
+          {
+           "k": "forks",
+           "v": 0
+          },
+          {
+           "k": "open_issues",
+           "v": 1
+          },
+          {
+           "k": "watchers",
+           "v": 0
+          },
+          {
+           "k": "default_branch",
+           "v": "main"
+          }
+         ]
+        }
+       },
+       {
+        "k": "sender",
+        "v": {
+         "t": 2,
+         "d": [
+          {
+           "k": "login",
+           "v": "nebuk89"
+          },
+          {
+           "k": "id",
+           "v": 2938470
+          },
+          {
+           "k": "node_id",
+           "v": "MDQ6VXNlcjI5Mzg0NzA="
+          },
+          {
+           "k": "avatar_url",
+           "v": "https://avatars.githubusercontent.com/u/2938470?v=4"
+          },
+          {
+           "k": "gravatar_id",
+           "v": ""
+          },
+          {
+           "k": "url",
+           "v": "https://api.github.com/users/nebuk89"
+          },
+          {
+           "k": "html_url",
+           "v": "https://github.com/nebuk89"
+          },
+          {
+           "k": "followers_url",
+           "v": "https://api.github.com/users/nebuk89/followers"
+          },
+          {
+           "k": "following_url",
+           "v": "https://api.github.com/users/nebuk89/following{/other_user}"
+          },
+          {
+           "k": "gists_url",
+           "v": "https://api.github.com/users/nebuk89/gists{/gist_id}"
+          },
+          {
+           "k": "starred_url",
+           "v": "https://api.github.com/users/nebuk89/starred{/owner}{/repo}"
+          },
+          {
+           "k": "subscriptions_url",
+           "v": "https://api.github.com/users/nebuk89/subscriptions"
+          },
+          {
+           "k": "organizations_url",
+           "v": "https://api.github.com/users/nebuk89/orgs"
+          },
+          {
+           "k": "repos_url",
+           "v": "https://api.github.com/users/nebuk89/repos"
+          },
+          {
+           "k": "events_url",
+           "v": "https://api.github.com/users/nebuk89/events{/privacy}"
+          },
+          {
+           "k": "received_events_url",
+           "v": "https://api.github.com/users/nebuk89/received_events"
+          },
+          {
+           "k": "type",
+           "v": "User"
+          },
+          {
+           "k": "user_view_type",
+           "v": "public"
+          },
+          {
+           "k": "site_admin",
+           "v": true
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "k": "workflow_ref",
+     "v": "nebuk89/test-small-workflows/.github/workflows/test_mac.yaml@refs/heads/main"
+    },
+    {
+     "k": "workflow_sha",
+     "v": "cf45a1ebfc3ccfa85a780adf10a3fd9320078f44"
+    },
+    {
+     "k": "repository_id",
+     "v": "1167651670"
+    },
+    {
+     "k": "triggering_actor",
+     "v": "nebuk89"
+    }
+   ]
+  },
+  "inputs": {
+   "t": 2,
+   "d": []
+  },
+  "job": {
+   "t": 2,
+   "d": [
+    {
+     "k": "check_run_id",
+     "v": 65038499248
+    }
+   ]
+  },
+  "matrix": null,
+  "needs": {
+   "t": 2,
+   "d": []
+  },
+  "strategy": {
+   "t": 2,
+   "d": [
+    {
+     "k": "fail-fast",
+     "v": true
+    },
+    {
+     "k": "job-index",
+     "v": 0
+    },
+    {
+     "k": "job-total",
+     "v": 1
+    },
+    {
+     "k": "max-parallel",
+     "v": 1
+    }
+   ]
+  },
+  "vars": {
+   "t": 2,
+   "d": []
+  }
+ },
+ "snapshot": null,
+ "billingOwnerId": "U_kgDOACzWZg"
+}

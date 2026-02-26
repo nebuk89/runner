@@ -19,6 +19,7 @@ pub mod handlers;
 pub mod issue_matcher;
 pub mod job_extension;
 pub mod job_runner;
+pub mod run_server;
 pub mod runner_context;
 pub mod steps_context;
 pub mod steps_runner;

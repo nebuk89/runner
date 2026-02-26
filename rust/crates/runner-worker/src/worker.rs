@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::job_runner::JobRunner;
+use crate::run_server::RunServer;
 
 /// Deserialized job request message from the listener.
 /// Maps `Pipelines.AgentJobRequestMessage` from the C# runner.
@@ -203,7 +204,7 @@ pub struct JobStep {
     pub condition: String,
 
     /// Timeout in minutes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub timeout_in_minutes: u32,
 
     /// Type of step: C# StepType enum serialized as string ("action").
@@ -217,15 +218,16 @@ pub struct JobStep {
     pub reference: Option<serde_json::Value>,
 
     /// Inline inputs / with values.
+    /// C# sends this as a TemplateToken (recursive AST), not a simple key→value map.
     #[serde(default)]
-    pub inputs: std::collections::HashMap<String, String>,
+    pub inputs: Option<serde_json::Value>,
 
     /// Step-level environment variables (TemplateToken in C#).
     #[serde(default)]
     pub environment: Option<serde_json::Value>,
 
-    /// Continue on error flag.
-    #[serde(default)]
+    /// Continue on error flag. C# sends null when not set.
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub continue_on_error: bool,
 
     /// The script body for run steps (not a top-level field in C#, extracted from inputs).
@@ -241,7 +243,7 @@ pub struct JobStep {
     pub working_directory: Option<String>,
 
     /// Whether the step is enabled (C# default: true).
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_as_true")]
     pub enabled: bool,
 
     /// Context name for the step (C# ActionStep.ContextName).
@@ -257,12 +259,72 @@ fn default_true() -> bool {
     true
 }
 
+/// Deserialize a value that might be `null` as the type's `Default`.
+/// serde `#[serde(default)]` only kicks in when the key is *absent*;
+/// this handles the case where the key is present with a JSON `null`.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    let opt = Option::<T>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
+/// Deserialize a bool that might be `null`, defaulting to `true`.
+fn deserialize_null_as_true<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<bool>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or(true))
+}
+
+use serde::Deserialize as _;
+
 impl JobStep {
     /// Extract the action reference as a structured type if possible.
     pub fn action_reference(&self) -> Option<ActionReference> {
         self.reference
             .as_ref()
             .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// Extract the inputs as a flat HashMap.
+    /// C# sends inputs as a TemplateToken (type=2 MappingToken with map array).
+    /// Each map entry has `Key` and `Value` (PascalCase) with `lit` string values.
+    pub fn inputs_map(&self) -> std::collections::HashMap<String, String> {
+        let mut result = std::collections::HashMap::new();
+        if let Some(ref inputs_val) = self.inputs {
+            if let Some(obj) = inputs_val.as_object() {
+                if let Some(map_arr) = obj.get("map").and_then(|v| v.as_array()) {
+                    for entry in map_arr {
+                        // Format: {"Key": {"type": 0, "lit": "name"}, "Value": {"type": 0, "lit": "value"}}
+                        if let Some(entry_obj) = entry.as_object() {
+                            let key = entry_obj
+                                .get("Key")
+                                .or_else(|| entry_obj.get("key"))
+                                .and_then(|k| AgentJobRequestMessage::template_token_to_string(k));
+                            let val = entry_obj
+                                .get("Value")
+                                .or_else(|| entry_obj.get("value"))
+                                .and_then(|v| AgentJobRequestMessage::template_token_to_string(v));
+                            if let (Some(k), Some(v)) = (key, val) {
+                                result.insert(k, v);
+                            }
+                        }
+                    }
+                } else {
+                    // Simple object mapping fallback
+                    for (k, v) in obj {
+                        if let Some(s) = v.as_str() {
+                            result.insert(k.clone(), s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        result
     }
 
     /// Extract the environment as a flat HashMap.
@@ -530,12 +592,38 @@ impl Worker {
         // Run the job
         let job_runner = JobRunner::new(Arc::clone(&self.host_context));
         let result = job_runner
-            .run_async(job_message, cancel_token.clone())
+            .run_async(job_message.clone(), cancel_token.clone())
             .await
             .unwrap_or_else(|e| {
                 tracing::error!("JobRunner failed: {:#}", e);
                 TaskResult::Failed
             });
+
+        // Report job completion to the server
+        // This is critical — without it the server thinks the job is still running
+        // and the broker will endlessly flood cancellation messages.
+        match RunServer::from_message(&job_message) {
+            Ok(run_server) => {
+                let report_trace = self.host_context.get_trace("Worker.CompleteJob");
+                if let Err(e) = run_server
+                    .complete_job(
+                        &job_message.plan_id(),
+                        &job_message.job_id,
+                        result,
+                        &report_trace,
+                    )
+                    .await
+                {
+                    trace.error(&format!("Failed to report job completion: {:#}", e));
+                }
+            }
+            Err(e) => {
+                trace.error(&format!(
+                    "Failed to create RunServer from job message: {:#}",
+                    e
+                ));
+            }
+        }
 
         // Cancel the listener task
         cancel_token.cancel();

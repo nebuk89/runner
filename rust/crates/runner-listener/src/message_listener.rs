@@ -438,6 +438,12 @@ impl MessageListener {
     }
 
     /// Follow up a BrokerMigration by getting the real message from the V2 broker.
+    ///
+    /// If the broker delivers a `JobCancellation` for a job that the runner is
+    /// not currently executing, we skip it and immediately re-poll the broker.
+    /// This prevents old/stale cancellation messages from blocking real job
+    /// requests. We'll try up to 30 iterations before giving up and returning
+    /// None so the outer V1 loop can re-establish the broker URL.
     async fn get_message_from_broker(
         &self,
         broker_base_url: &str,
@@ -460,63 +466,110 @@ impl MessageListener {
             settings.disable_update,
         );
 
-        self.trace.info(&format!("Requesting message from broker: {}", url));
-
-        let response = tokio::select! {
-            result = async {
-                client
-                    .get(&url)
-                    .bearer_auth(token)
-                    .header("Accept", "application/json;api-version=6.0-preview")
-                    .timeout(GET_MESSAGE_TIMEOUT)
-                    .send()
-                    .await
-            } => {
-                match result {
-                    Ok(resp) => resp,
-                    Err(e) if e.is_timeout() => {
-                        self.trace.verbose("Broker long-poll timed out — no message available");
-                        return Ok(None);
-                    }
-                    Err(e) => {
-                        return Err(anyhow::anyhow!("Failed to poll broker: {}", e));
-                    }
-                }
-            },
-            _ = cancel.cancelled() => {
+        // Loop to drain stale cancellation messages from the broker.
+        // The broker auto-dequeues on read, so each iteration removes one
+        // cancellation from the queue. We keep polling until we get a real
+        // message or hit the iteration limit.
+        let max_skip_iterations = 30;
+        for skip_iter in 0..max_skip_iterations {
+            if cancel.is_cancelled() {
                 return Ok(None);
             }
-        };
 
-        let status = response.status();
+            if skip_iter > 0 {
+                self.trace.verbose(&format!(
+                    "Re-polling broker (skip iteration {}/{})",
+                    skip_iter, max_skip_iterations
+                ));
+            } else {
+                self.trace.info(&format!("Requesting message from broker: {}", url));
+            }
 
-        self.trace.info(&format!("Broker response status: {}", status.as_u16()));
+            let response = tokio::select! {
+                result = async {
+                    client
+                        .get(&url)
+                        .bearer_auth(token)
+                        .header("Accept", "application/json;api-version=6.0-preview")
+                        .timeout(GET_MESSAGE_TIMEOUT)
+                        .send()
+                        .await
+                } => {
+                    match result {
+                        Ok(resp) => resp,
+                        Err(e) if e.is_timeout() => {
+                            self.trace.verbose("Broker long-poll timed out — no message available");
+                            return Ok(None);
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("Failed to poll broker: {}", e));
+                        }
+                    }
+                },
+                _ = cancel.cancelled() => {
+                    return Ok(None);
+                }
+            };
 
-        if status == reqwest::StatusCode::ACCEPTED || status == reqwest::StatusCode::NO_CONTENT {
-            self.trace.info("Broker returned 202/204 — no messages available");
-            return Ok(None);
+            let status = response.status();
+
+            if status == reqwest::StatusCode::ACCEPTED || status == reqwest::StatusCode::NO_CONTENT {
+                if skip_iter > 0 {
+                    self.trace.info(&format!(
+                        "Broker queue drained after skipping {} stale cancellations",
+                        skip_iter
+                    ));
+                } else {
+                    self.trace.info("Broker returned 202/204 — no messages available");
+                }
+                return Ok(None);
+            }
+
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(anyhow::anyhow!(
+                    "Broker message request failed with HTTP {}: {}",
+                    status.as_u16(),
+                    body
+                ));
+            }
+
+            let body_text = response
+                .text()
+                .await
+                .context("Failed to read broker response body")?;
+
+            self.trace.info(&format!("Broker response: {}", &body_text[..body_text.len().min(500)]));
+
+            let message: TaskAgentMessage = serde_json::from_str(&body_text)
+                .context("Failed to deserialize broker message")?;
+
+            // Check if this is a JobCancellation for a job we're not running.
+            // The broker keeps delivering new cancellation messages for old/stale
+            // jobs. We skip these and immediately re-poll to drain the queue.
+            if message.type_kind() == MessageType::JobCancel {
+                self.trace.info(&format!(
+                    "Skipping stale JobCancellation #{} — re-polling broker",
+                    message.message_id
+                ));
+                continue;
+            }
+
+            if skip_iter > 0 {
+                self.trace.info(&format!(
+                    "Got real message after skipping {} stale cancellations",
+                    skip_iter
+                ));
+            }
+
+            return Ok(Some(message));
         }
 
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "Broker message request failed with HTTP {}: {}",
-                status.as_u16(),
-                body
-            ));
-        }
-
-        let body_text = response
-            .text()
-            .await
-            .context("Failed to read broker response body")?;
-
-        self.trace.info(&format!("Broker response: {}", &body_text[..body_text.len().min(500)]));
-
-        let message: TaskAgentMessage = serde_json::from_str(&body_text)
-            .context("Failed to deserialize broker message")?;
-
-        Ok(Some(message))
+        self.trace.warning(&format!(
+            "Hit max skip iterations ({}) for stale cancellations — returning None",
+            max_skip_iterations
+        ));
+        Ok(None)
     }
 
     /// Acknowledge a runner request to the broker (best-effort, short timeout).

@@ -104,13 +104,50 @@ impl JobExtension {
                         shell: step.shell.clone(),
                         working_directory: step.working_directory.clone(),
                         environment: step.environment_map(),
-                        inputs: step.inputs.clone(),
+                        inputs: step.inputs_map(),
                     };
                     context.job_steps.push_back(Box::new(run_step));
                 }
                 "action" => {
-                    // Action step - resolve and create the appropriate handler
-                    self.build_action_step(context, step, resolved_actions)?;
+                    // Check reference type: "script" means this is a run: step
+                    // wrapped as an ActionStep with ScriptReference.
+                    let is_script_ref = step
+                        .reference
+                        .as_ref()
+                        .and_then(|r| r.as_object())
+                        .and_then(|obj| obj.get("type"))
+                        .and_then(|t| t.as_str())
+                        .map(|t| t == "script")
+                        .unwrap_or(false);
+
+                    if is_script_ref {
+                        // Treat as a script/run step. Extract the script body
+                        // from the inputs TemplateToken (key: "script").
+                        let inputs = step.inputs_map();
+                        let script = inputs.get("script").cloned().unwrap_or_default();
+                        let shell = inputs.get("shell").cloned().or_else(|| step.shell.clone());
+                        let working_directory = inputs
+                            .get("working-directory")
+                            .cloned()
+                            .or_else(|| step.working_directory.clone());
+
+                        let run_step = RunStep {
+                            id: step.id.clone(),
+                            display_name: step.display_name.clone(),
+                            condition: step.condition.clone(),
+                            timeout: step.timeout_in_minutes,
+                            continue_on_error: step.continue_on_error,
+                            script,
+                            shell,
+                            working_directory,
+                            environment: step.environment_map(),
+                            inputs,
+                        };
+                        context.job_steps.push_back(Box::new(run_step));
+                    } else {
+                        // Real action step - resolve and create the appropriate handler
+                        self.build_action_step(context, step, resolved_actions)?;
+                    }
                 }
                 other => {
                     context.warning(&format!("Unknown step type: {}", other));
@@ -125,7 +162,7 @@ impl JobExtension {
                         shell: step.shell.clone(),
                         working_directory: step.working_directory.clone(),
                         environment: step.environment_map(),
-                        inputs: step.inputs.clone(),
+                        inputs: step.inputs_map(),
                     };
                     context.job_steps.push_back(Box::new(run_step));
                 }
@@ -210,7 +247,7 @@ impl JobExtension {
                     entry_point: pre_entry.clone(),
                     ..action_context.clone()
                 },
-                inputs: step.inputs.clone(),
+                inputs: step.inputs_map(),
                 environment: step.environment_map(),
             };
             // Pre steps run as part of the main step queue (at the beginning)
@@ -225,7 +262,7 @@ impl JobExtension {
             timeout: step.timeout_in_minutes,
             continue_on_error: step.continue_on_error,
             action_context: action_context.clone(),
-            inputs: step.inputs.clone(),
+            inputs: step.inputs_map(),
             environment: step.environment_map(),
         };
         context.job_steps.push_back(Box::new(main_step));
@@ -248,7 +285,7 @@ impl JobExtension {
                     entry_point: post_entry.clone(),
                     ..action_context.clone()
                 },
-                inputs: step.inputs.clone(),
+                inputs: step.inputs_map(),
                 environment: step.environment_map(),
             };
             context.post_job_steps.push(Box::new(post_step));
