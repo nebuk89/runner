@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::execution_context::{ExecutionContext, Global};
 use crate::feature_manager::FeatureManager;
 use crate::job_extension::JobExtension;
+use crate::results_client::ResultsClient;
 use crate::steps_runner::StepsRunner;
 use crate::tracking_manager::TrackingManager;
 use crate::variables::Variables;
@@ -120,8 +121,26 @@ impl JobRunner {
 
         root_context.info("Job initialized successfully.");
 
+        // Create Results Service client for step status reporting and log upload
+        let results_client = match ResultsClient::from_message(&message) {
+            Ok(client) => {
+                trace.info("Results Service client created successfully.");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                trace.info(&format!(
+                    "Could not create Results Service client (logs won't be uploaded): {}",
+                    e
+                ));
+                None
+            }
+        };
+
         // Run all steps
-        let steps_runner = StepsRunner::new();
+        let mut steps_runner = StepsRunner::new();
+        if let Some(client) = results_client {
+            steps_runner = steps_runner.with_results_client(client);
+        }
         if let Err(e) = steps_runner.run_async(&mut root_context).await {
             root_context.error(&format!("Steps execution failed: {:#}", e));
             if root_context.result().is_none() {

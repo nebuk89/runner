@@ -9,7 +9,6 @@ use std::path::Path;
 
 use crate::execution_context::ExecutionContext;
 use crate::handlers::handler::{Handler, HandlerData};
-use crate::handlers::output_manager::OutputManager;
 use crate::handlers::step_host::{DefaultStepHost, StepHost};
 
 /// Script handler for `run:` steps.
@@ -117,9 +116,8 @@ impl Handler for ScriptHandler {
 
         // Execute via StepHost
         let step_host = DefaultStepHost::new();
-        let mut output_manager = OutputManager::new(context);
 
-        let exit_code = step_host
+        let step_output = step_host
             .execute_async(
                 &working_directory,
                 &shell_command,
@@ -129,18 +127,23 @@ impl Handler for ScriptHandler {
             )
             .await?;
 
+        // Feed captured output lines into the execution context's log
+        for line in &step_output.output_lines {
+            context.write(line);
+        }
+
         // Clean up temp file
         let _ = std::fs::remove_file(&script_file);
 
         // Handle exit code
-        if exit_code != 0 {
+        if step_output.exit_code != 0 {
             context.error(&format!(
                 "Process completed with exit code {}.",
-                exit_code
+                step_output.exit_code
             ));
             context.complete(
                 runner_common::util::task_result_util::TaskResult::Failed,
-                Some(&format!("Exit code {}", exit_code)),
+                Some(&format!("Exit code {}", step_output.exit_code)),
             );
         } else {
             context.debug("Process completed successfully.");

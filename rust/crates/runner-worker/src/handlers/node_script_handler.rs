@@ -142,7 +142,7 @@ impl Handler for NodeScriptActionHandler {
 
         // Execute
         let step_host = DefaultStepHost::new();
-        let exit_code = step_host
+        let step_output = step_host
             .execute_async(
                 &working_directory,
                 &node_binary_str,
@@ -152,14 +152,19 @@ impl Handler for NodeScriptActionHandler {
             )
             .await?;
 
-        if exit_code != 0 {
+        // Feed captured output lines into the execution context's log
+        for line in &step_output.output_lines {
+            context.write(line);
+        }
+
+        if step_output.exit_code != 0 {
             context.error(&format!(
                 "Node.js action completed with exit code {}.",
-                exit_code
+                step_output.exit_code
             ));
             context.complete(
                 runner_common::util::task_result_util::TaskResult::Failed,
-                Some(&format!("Exit code {}", exit_code)),
+                Some(&format!("Exit code {}", step_output.exit_code)),
             );
         }
 

@@ -1,9 +1,12 @@
 // StepsRunner mapping `StepsRunner.cs`.
 // Drains the job_steps queue then post_job_steps stack, evaluating conditions,
 // enforcing timeouts, and updating the overall job result.
+// Also reports step status and uploads logs to the Results Service.
 
 use anyhow::Result;
+use chrono::Utc;
 use runner_common::util::task_result_util::{TaskResult, TaskResultUtil};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -11,19 +14,85 @@ use crate::action_command_manager::ActionCommandManager;
 use crate::execution_context::ExecutionContext;
 use crate::expressions::evaluate_condition;
 use crate::file_command_manager::FileCommandManager;
+use crate::results_client::{ResultsClient, StepConclusion, StepStatus, StepUpdate};
 
 /// Executes all steps in a job, in order.
-pub struct StepsRunner;
+pub struct StepsRunner {
+    /// Optional Results Service client for reporting step status and uploading logs.
+    results_client: Option<Arc<ResultsClient>>,
+}
 
 impl StepsRunner {
     pub fn new() -> Self {
-        Self
+        Self {
+            results_client: None,
+        }
+    }
+
+    /// Set the Results Service client for step status reporting and log upload.
+    pub fn with_results_client(mut self, client: Arc<ResultsClient>) -> Self {
+        self.results_client = Some(client);
+        self
+    }
+
+    /// Convert a TaskResult to Results Service StepConclusion.
+    fn task_result_to_conclusion(result: TaskResult) -> StepConclusion {
+        match result {
+            TaskResult::Succeeded | TaskResult::SucceededWithIssues => StepConclusion::Success,
+            TaskResult::Failed | TaskResult::Abandoned => StepConclusion::Failure,
+            TaskResult::Canceled => StepConclusion::Cancelled,
+            TaskResult::Skipped => StepConclusion::Skipped,
+        }
+    }
+
+    /// Report a step status update to the Results Service.
+    async fn report_step_status(
+        &self,
+        step_id: &str,
+        step_number: u32,
+        display_name: &str,
+        status: StepStatus,
+        conclusion: StepConclusion,
+        started_at: Option<&str>,
+        completed_at: Option<&str>,
+        change_order: u64,
+    ) {
+        if let Some(ref client) = self.results_client {
+            let update = StepUpdate {
+                external_id: step_id.to_string(),
+                number: step_number,
+                name: display_name.to_string(),
+                status,
+                started_at: started_at.map(|s| s.to_string()),
+                completed_at: completed_at.map(|s| s.to_string()),
+                conclusion,
+            };
+
+            let trace = SimpleTrace;
+            if let Err(e) = client.update_workflow_steps(&[update], change_order, &trace).await {
+                tracing::warn!("Failed to update step status: {:#}", e);
+            }
+        }
+    }
+
+    /// Upload step logs to the Results Service.
+    async fn upload_logs(&self, step_id: &str, log_lines: &[String]) {
+        if let Some(ref client) = self.results_client {
+            let trace = SimpleTrace;
+            if let Err(e) = client.upload_step_log(step_id, log_lines, &trace).await {
+                tracing::warn!("Failed to upload step logs: {:#}", e);
+            }
+        }
     }
 
     /// Run all job steps and post-job steps.
     pub async fn run_async(&self, context: &mut ExecutionContext) -> Result<()> {
+        let mut step_number: u32 = 0;
+        let mut change_order: u64 = 0;
+
         // Phase 1: Drain the job_steps queue (main steps)
         while let Some(step) = context.job_steps.pop_front() {
+            step_number += 1;
             let cancel = context.cancel_token();
 
             // Check cancellation
@@ -50,10 +119,38 @@ impl StepsRunner {
                     TaskResult::Skipped,
                     std::collections::HashMap::new(),
                 );
+
+                // Report skipped status to Results Service
+                change_order += 1;
+                self.report_step_status(
+                    step.id(),
+                    step_number,
+                    step.display_name(),
+                    StepStatus::Completed,
+                    StepConclusion::Skipped,
+                    None,
+                    Some(&Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()),
+                    change_order,
+                ).await;
+
                 continue;
             }
 
             context.info(&format!("Starting step: {}", step.display_name()));
+
+            // Report step as InProgress to Results Service
+            let started_at = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+            change_order += 1;
+            self.report_step_status(
+                step.id(),
+                step_number,
+                step.display_name(),
+                StepStatus::InProgress,
+                StepConclusion::Unknown,
+                Some(&started_at),
+                None,
+                change_order,
+            ).await;
 
             // Create step-level execution context
             let mut step_context = context.create_step_context(
@@ -107,6 +204,23 @@ impl StepsRunner {
                 }
             };
 
+            // Upload step logs to Results Service
+            self.upload_logs(step.id(), step_context.log_lines()).await;
+
+            // Report step as Completed to Results Service
+            let completed_at = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+            change_order += 1;
+            self.report_step_status(
+                step.id(),
+                step_number,
+                step.display_name(),
+                StepStatus::Completed,
+                Self::task_result_to_conclusion(conclusion),
+                Some(&started_at),
+                Some(&completed_at),
+                change_order,
+            ).await;
+
             // Record step outcome and outputs in steps context
             context.steps_context_mut().record_step(
                 step.id(),
@@ -129,7 +243,7 @@ impl StepsRunner {
             context.set_result(merged);
 
             context.info(&format!(
-                "Step '{}' completed with outcome={}, conclusion={}",
+                "Step '{}' completed with outcome={:?}, conclusion={:?}",
                 step.display_name(),
                 outcome,
                 conclusion
@@ -238,6 +352,21 @@ impl StepsRunner {
             }
             _ => true,
         }
+    }
+}
+
+/// Simple trace writer for Results Service logging.
+struct SimpleTrace;
+
+impl runner_sdk::TraceWriter for SimpleTrace {
+    fn info(&self, message: &str) {
+        tracing::info!(target: "results", "{}", message);
+    }
+    fn verbose(&self, message: &str) {
+        tracing::debug!(target: "results", "{}", message);
+    }
+    fn error(&self, message: &str) {
+        tracing::error!(target: "results", "{}", message);
     }
 }
 

@@ -470,7 +470,7 @@ impl MessageListener {
         // The broker auto-dequeues on read, so each iteration removes one
         // cancellation from the queue. We keep polling until we get a real
         // message or hit the iteration limit.
-        let max_skip_iterations = 30;
+        let max_skip_iterations = 10000;
         for skip_iter in 0..max_skip_iterations {
             if cancel.is_cancelled() {
                 return Ok(None);
@@ -548,10 +548,12 @@ impl MessageListener {
             // The broker keeps delivering new cancellation messages for old/stale
             // jobs. We skip these and immediately re-poll to drain the queue.
             if message.type_kind() == MessageType::JobCancel {
-                self.trace.info(&format!(
-                    "Skipping stale JobCancellation #{} — re-polling broker",
-                    message.message_id
-                ));
+                if skip_iter < 5 || skip_iter % 100 == 0 {
+                    self.trace.info(&format!(
+                        "Skipping stale JobCancellation #{} (iteration {}) — re-polling broker",
+                        message.message_id, skip_iter
+                    ));
+                }
                 continue;
             }
 

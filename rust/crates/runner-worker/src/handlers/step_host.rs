@@ -9,6 +9,14 @@ use tokio_util::sync::CancellationToken;
 use runner_sdk::ProcessInvoker;
 use runner_sdk::TraceWriter;
 
+/// Result of a step execution including the exit code and captured output lines.
+pub struct StepHostOutput {
+    /// The process exit code.
+    pub exit_code: i32,
+    /// All stdout and stderr lines captured during execution, in order.
+    pub output_lines: Vec<String>,
+}
+
 /// Trait for step execution hosts.
 ///
 /// `DefaultStepHost` runs processes directly on the host.
@@ -17,7 +25,7 @@ use runner_sdk::TraceWriter;
 pub trait StepHost: Send + Sync {
     /// Execute a process.
     ///
-    /// Returns the process exit code.
+    /// Returns the exit code and all captured output lines.
     async fn execute_async(
         &self,
         working_directory: &str,
@@ -25,7 +33,7 @@ pub trait StepHost: Send + Sync {
         arguments: &str,
         environment: &HashMap<String, String>,
         cancel_token: CancellationToken,
-    ) -> Result<i32>;
+    ) -> Result<StepHostOutput>;
 }
 
 /// Default step host - runs processes directly on the host OS.
@@ -63,9 +71,37 @@ impl StepHost for DefaultStepHost {
         arguments: &str,
         environment: &HashMap<String, String>,
         cancel_token: CancellationToken,
-    ) -> Result<i32> {
+    ) -> Result<StepHostOutput> {
         let trace = std::sync::Arc::new(StepHostTraceWriter);
-        let invoker = ProcessInvoker::new(trace);
+        let mut invoker = ProcessInvoker::new(trace);
+
+        // Take the output receivers so we can capture lines
+        let mut stdout_rx = invoker.take_stdout_receiver();
+        let mut stderr_rx = invoker.take_stderr_receiver();
+
+        // Collect output lines in a shared vec
+        let output_lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        // Spawn tasks to read stdout and stderr into our collection
+        let out_lines = output_lines.clone();
+        let stdout_task = tokio::spawn(async move {
+            if let Some(ref mut rx) = stdout_rx {
+                while let Some(event) = rx.recv().await {
+                    tracing::info!(target: "step_host", "{}", event.data);
+                    out_lines.lock().unwrap().push(event.data);
+                }
+            }
+        });
+
+        let err_lines = output_lines.clone();
+        let stderr_task = tokio::spawn(async move {
+            if let Some(ref mut rx) = stderr_rx {
+                while let Some(event) = rx.recv().await {
+                    tracing::info!(target: "step_host", "{}", event.data);
+                    err_lines.lock().unwrap().push(event.data);
+                }
+            }
+        });
 
         let exit_code = invoker
             .execute(
@@ -80,7 +116,22 @@ impl StepHost for DefaultStepHost {
             .await
             .context("Process execution failed")?;
 
-        Ok(exit_code)
+        // Drop the invoker to close the channel senders, so the receiver tasks can finish
+        drop(invoker);
+
+        // Wait for output readers to finish
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+
+        let lines = match std::sync::Arc::try_unwrap(output_lines) {
+            Ok(mutex) => mutex.into_inner().unwrap(),
+            Err(arc) => arc.lock().unwrap().clone(),
+        };
+
+        Ok(StepHostOutput {
+            exit_code,
+            output_lines: lines,
+        })
     }
 }
 
@@ -104,7 +155,7 @@ impl StepHost for ContainerStepHost {
         arguments: &str,
         environment: &HashMap<String, String>,
         cancel_token: CancellationToken,
-    ) -> Result<i32> {
+    ) -> Result<StepHostOutput> {
         let trace = std::sync::Arc::new(StepHostTraceWriter);
 
         // Build docker exec command
@@ -137,7 +188,33 @@ impl StepHost for ContainerStepHost {
 
         let docker_arguments = docker_args.join(" ");
 
-        let invoker = ProcessInvoker::new(trace);
+        let mut invoker = ProcessInvoker::new(trace);
+
+        // Capture output
+        let mut stdout_rx = invoker.take_stdout_receiver();
+        let mut stderr_rx = invoker.take_stderr_receiver();
+        let output_lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        let out_lines = output_lines.clone();
+        let stdout_task = tokio::spawn(async move {
+            if let Some(ref mut rx) = stdout_rx {
+                while let Some(event) = rx.recv().await {
+                    tracing::info!(target: "step_host", "{}", event.data);
+                    out_lines.lock().unwrap().push(event.data);
+                }
+            }
+        });
+
+        let err_lines = output_lines.clone();
+        let stderr_task = tokio::spawn(async move {
+            if let Some(ref mut rx) = stderr_rx {
+                while let Some(event) = rx.recv().await {
+                    tracing::info!(target: "step_host", "{}", event.data);
+                    err_lines.lock().unwrap().push(event.data);
+                }
+            }
+        });
+
         let exit_code = invoker
             .execute(
                 "",
@@ -151,7 +228,21 @@ impl StepHost for ContainerStepHost {
             .await
             .context("Docker exec failed")?;
 
-        Ok(exit_code)
+        // Drop the invoker to close the channel senders
+        drop(invoker);
+
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+
+        let lines = match std::sync::Arc::try_unwrap(output_lines) {
+            Ok(mutex) => mutex.into_inner().unwrap(),
+            Err(arc) => arc.lock().unwrap().clone(),
+        };
+
+        Ok(StepHostOutput {
+            exit_code,
+            output_lines: lines,
+        })
     }
 }
 
